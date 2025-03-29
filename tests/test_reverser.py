@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 import tempfile
 import torch  # type: ignore
 
-from aparecium.reverser import (  # type: ignore
+from aparecium import (  # type: ignore
     TransformerSeq2SeqModel,
     Seq2SeqReverser,
     generate_subsequent_mask,

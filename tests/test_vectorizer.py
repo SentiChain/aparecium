@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import torch  # type: ignore
 
-from aparecium.vectorizer import Vectorizer  # type: ignore
+from aparecium import Vectorizer  # type: ignore
 
 
 class TestVectorizer(unittest.TestCase):
