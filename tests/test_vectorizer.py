@@ -3,9 +3,10 @@ Tests for the Vectorizer module.
 """
 
 import unittest
-import torch
 from unittest.mock import patch, MagicMock
-from aparecium.vectorizer import Vectorizer
+import torch  # type: ignore
+
+from aparecium.vectorizer import Vectorizer  # type: ignore
 
 
 class TestVectorizer(unittest.TestCase):
