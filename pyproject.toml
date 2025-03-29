@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aparecium"
 version = "0.1.0"
-description = "Aparecium is a charm to reveal secret messages written in Invisible Ink"
+description = "Aparecium (named after the Harry Potter spell to reveal hidden writing) is a Python package for revealing text from embedding vectors processed by SentiChain."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [
@@ -28,3 +28,6 @@ requires-python = ">=3.7"
 "Homepage" = "https://github.com/SentiChain/aparecium"
 "Source Code" = "https://github.com/SentiChain/aparecium"
 "Tracker" = "https://github.com/SentiChain/aparecium/issues"
+
+[tool.setuptools]
+packages = ["aparecium"]
