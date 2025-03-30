@@ -1,21 +1,28 @@
 """
 Seq2Seq Reverser Module
 
-This module provides functionality for converting numeric representations back to text
-using a Transformer-based sequence-to-sequence architecture. It includes a decoder model 
-that can be trained with teacher forcing and used for inference to generate text from 
-embedded representations.
+This module provides functionality for converting numeric representations 
+back to text using a Transformer-based sequence-to-sequence architecture. 
+It includes a decoder model that can be trained with teacher forcing and 
+used at inference to generate text from embedded representations.
 
-The core classes include:
-- TransformerSeq2SeqModel: The neural network model for decoding
-- Seq2SeqReverser: Main interface for training and text generation
+Classes:
+    TransformerSeq2SeqModel: The neural network model (Transformer decoder).
+    Seq2SeqReverser: Main interface for training and text generation.
 
-Example usage:
-    reverser = Seq2SeqReverser()
-    # Train with embedded representations and corresponding text
-    reverser.train_step(source_embeddings, target_text)
-    # Generate text from embeddings
-    generated_text = reverser.generate_text(source_embeddings)
+Example:
+    >>> from reverser import Seq2SeqReverser
+    >>> reverser = Seq2SeqReverser()
+    >>> loss = reverser.train_step_batch(
+    ...     source_rep_batch=[[[0.1]*768]*10, [[0.2]*768]*12],  # example embeddings
+    ...     target_text_batch=["Hello world", "Another example"]
+    ... )
+    >>> text_output = reverser.generate_text(
+    ...     source_rep=[[0.1]*768]*10,
+    ...     max_length=20
+    ... )
+    >>> print(text_output)
+    "Hello world"
 """
 
 from typing import Optional, List
@@ -33,20 +40,18 @@ logger = logging.getLogger(__name__)
 
 def generate_subsequent_mask(sz: int, device: torch.device) -> torch.Tensor:
     """
-    Creates a causal (autoregressive) mask of shape (sz, sz).
+    Create a causal (autoregressive) mask of shape (seq_len, seq_len).
 
     This mask ensures each position can only attend to previous positions,
-    which is necessary for autoregressive decoding. The resulting mask is a boolean
-    tensor where True values indicate positions that should be masked out (cannot
-    attend to).
+    which is needed for autoregressive decoding. True values indicate positions
+    that should be masked out (future tokens).
 
     Args:
-        sz: The size of the square mask
-        device: The torch device on which to create the mask
+        seq_len (int): Length of the sequence to mask.
+        device (torch.device): The torch device on which to create the mask.
 
     Returns:
-        A boolean tensor of shape (sz, sz) where True values indicate positions
-        that should be masked out (i.e., future tokens that cannot be attended to)
+        torch.Tensor: A boolean tensor of shape (seq_len, seq_len).
     """
     mask = torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
     return mask
@@ -63,10 +68,10 @@ class TransformerSeq2SeqModel(nn.Module):
     of output tokens.
 
     Attributes:
-        token_embedding: Embedding layer for input tokens
-        pos_embedding: Positional embedding layer
-        transformer_decoder: Stack of transformer decoder layers
-        fc_out: Linear layer projecting to vocabulary size
+        token_embedding (nn.Embedding): Embedding layer for input tokens.
+        pos_embedding (nn.Embedding): Positional embedding layer.
+        transformer_decoder (nn.TransformerDecoder): Stacked decoder layers.
+        fc_out (nn.Linear): Projection layer from d_model to vocab size.
     """
 
     def __init__(
@@ -81,11 +86,11 @@ class TransformerSeq2SeqModel(nn.Module):
         Initialize the TransformerSeq2SeqModel.
 
         Args:
-            vocab_size: Size of the vocabulary (output dimension)
-            d_model: Dimensionality of the model's hidden states
-            num_decoder_layers: Number of stacked transformer decoder layers
-            nhead: Number of attention heads in the transformer
-            dim_feedforward: Dimensionality of the transformer's feed-forward networks
+            vocab_size (int): Size of the output vocabulary.
+            d_model (int): Dimensionality of embeddings and hidden states.
+            num_decoder_layers (int): Number of Transformer decoder layers.
+            nhead (int): Number of attention heads.
+            dim_feedforward (int): Dimensionality of the feed-forward layers.
         """
         super().__init__()
         self.token_embedding = nn.Embedding(vocab_size, d_model)
@@ -110,18 +115,21 @@ class TransformerSeq2SeqModel(nn.Module):
         tgt_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Forward pass of the transformer decoder model.
+        Forward pass of the Transformer decoder model.
 
         Args:
-            encoder_outputs: Output tensor from an encoder (memory)
+            encoder_outputs (torch.Tensor):
+                Output tensor (memory) from an encoder.
                 Shape: (src_seq_len, batch_size, d_model)
-            tgt_input_ids: Target input token IDs
-                Shape: (tgt_seq_len, batch_size)
-            tgt_mask: Mask to prevent attending to future positions
-                Shape: (tgt_seq_len, tgt_seq_len)
+            tgt_input_ids (torch.Tensor):
+                Target input token IDs. Shape: (tgt_seq_len, batch_size)
+            tgt_mask (torch.Tensor, optional):
+                Autoregressive mask of shape (tgt_seq_len, tgt_seq_len)
+                to block attention to future tokens.
 
         Returns:
-            Logits for the next token prediction
+            torch.Tensor:
+                Logits for next-token prediction.
                 Shape: (tgt_seq_len, batch_size, vocab_size)
         """
         tgt_seq_len, batch_size = tgt_input_ids.size()
@@ -145,18 +153,8 @@ class Seq2SeqReverser:
     A seq2seq model that takes a numeric "source" representation
     (list of lists of floats) and produces text.
 
-    This class provides the main interface for the reverser functionality,
-    handling training, inference, saving, and loading of models. It can be
-    trained with teacher forcing by providing numeric encoder outputs and
-    target text pairs.
-
-    Attributes:
-        device: The torch device (CPU or GPU) to use
-        tokenizer: A pretrained tokenizer for converting between text and token IDs
-        decoder: The TransformerSeq2SeqModel instance
-        criterion: Loss function (typically CrossEntropyLoss)
-        optimizer: Optimizer for training
-        config: Dictionary storing model configuration parameters
+    Provides training (with teacher forcing) and inference methods,
+    as well as model saving/loading functionality.
     """
 
     def __init__(
@@ -173,13 +171,20 @@ class Seq2SeqReverser:
         Initialize the Seq2SeqReverser model.
 
         Args:
-            model_name: The name or path of the pre-trained model to use for the tokenizer
-            d_model: Dimensionality of the model's hidden states
-            num_decoder_layers: Number of stacked transformer decoder layers
-            nhead: Number of attention heads in the transformer
-            dim_feedforward: Dimensionality of the transformer's feed-forward networks
-            lr: Learning rate for the optimizer
-            device: The device to use ('cuda', 'cpu', or None to auto-select)
+            model_name (str):
+                The name or path of the Hugging Face tokenizer to use.
+            d_model (int):
+                Dimensionality of embeddings and hidden states.
+            num_decoder_layers (int):
+                Number of stacked transformer decoder layers.
+            nhead (int):
+                Number of attention heads.
+            dim_feedforward (int):
+                Dimensionality of the transformer's feed-forward networks.
+            lr (float):
+                Learning rate for the optimizer.
+            device (Optional[str]):
+                The device to use ('cuda', 'cpu', or None for auto-select).
         """
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -214,16 +219,14 @@ class Seq2SeqReverser:
         """
         Perform a single training step using teacher forcing.
 
-        Takes source embeddings and target text, and trains the model to predict
-        the next token in the sequence given the previous tokens and source embeddings.
-
         Args:
-            source_rep: List of lists of floats representing the source embeddings
-                Shape: (src_seq_len, d_model)
-            target_text: The target text string to predict
+            source_rep (List[List[float]]):
+                Source embeddings of shape (src_seq_len, d_model).
+            target_text (str):
+                The target text string to predict.
 
         Returns:
-            The training loss for this step (float)
+            float: The training loss for this step.
         """
         self.decoder.train()
         if not source_rep:
@@ -264,17 +267,20 @@ class Seq2SeqReverser:
         max_target_length: int = 256,
     ) -> float:
         """
-        Batched teacher-forcing training step.
+        Perform a batched teacher-forcing training step.
 
         Args:
-            source_rep_batch: A list of source embedding matrices,
-                each shape: (src_seq_len_i, d_model). Typically length = batch_size.
-            target_text_batch: A list of target strings of length = batch_size.
-            max_source_length: Optional limit on source sequence length (truncate).
-            max_target_length: Optional limit on target sequence length (truncate).
+            source_rep_batch (List[List[List[float]]]):
+                A list of source embedding matrices, each (src_seq_len_i, d_model).
+            target_text_batch (List[str]):
+                A list of target strings corresponding to each source batch.
+            max_source_length (int):
+                Truncate source sequences to this length.
+            max_target_length (int):
+                Truncate target sequences to this length.
 
         Returns:
-            The loss value (float) for this batch.
+            float: The loss value for this batch.
         """
         self.decoder.train()
         batch_size = len(source_rep_batch)
@@ -339,32 +345,24 @@ class Seq2SeqReverser:
         """
         Generate text from source embeddings using beam search, greedy decoding, or sampling.
 
-        This method takes encoded vector representations and generates human-readable text
-        by decoding them through the sequence-to-sequence model. It supports multiple decoding
-        strategies to balance between deterministic outputs and creative diversity.
-
         Args:
-            source_rep: Source embeddings matrix with shape (src_seq_len, d_model).
-                Each row represents a token's embedding in the source sequence.
-            max_length: Maximum number of tokens to generate before stopping.
-            num_beams: Number of beams for beam search. Values > 1 activate beam search,
-                which performs a breadth-first search through the probability space.
-            do_sample: Whether to sample from the probability distribution (True) or
-                use greedy decoding (False). Only applies when num_beams=1.
-            top_k: In sampling mode, only consider the top-k most probable tokens.
-            top_p: In sampling mode, only consider tokens within the top-p probability mass
-                (nucleus sampling).
-            temperature: Controls randomness in sampling. Higher values (e.g., 1.5)
-                produce more diverse outputs, lower values (e.g., 0.7) produce more
-                deterministic outputs. Range: (0.0, inf).
+            source_rep (List[List[float]]):
+                Source embeddings of shape (src_seq_len, d_model).
+            max_length (int):
+                Maximum number of tokens to generate.
+            num_beams (int):
+                Number of beams for beam search. If > 1, beam search is used.
+            do_sample (bool):
+                Whether to sample from the probability distribution (if num_beams=1).
+            top_k (int):
+                Top-k sampling filter. Used only if do_sample=True.
+            top_p (float):
+                Nucleus (top-p) sampling filter. Used only if do_sample=True.
+            temperature (float):
+                Softmax temperature for controlling randomness in sampling.
 
         Returns:
-            A string containing the generated text with special tokens removed.
-
-        Note:
-            For maximum determinism, use greedy decoding (num_beams=1, do_sample=False).
-            For maximum diversity, use sampling with higher temperature values.
-            For a balance of quality and diversity, beam search (num_beams=3-5) often works well.
+            str: The generated text, with special tokens removed.
         """
         self.decoder.eval()
         if not source_rep:
@@ -403,28 +401,23 @@ class Seq2SeqReverser:
         """
         Perform autoregressive text generation using either greedy decoding or sampling.
 
-        This internal method implements the core text generation loop for non-beam search
-        approaches. It iteratively builds the output sequence token-by-token until reaching
-        a stop condition (max length or end token).
-
         Args:
-            encoder_outputs: Tensor containing encoder representations with shape
-                (src_seq_len, batch_size=1, d_model).
-            max_length: Maximum number of tokens to generate.
-            do_sample: If True, sample from the probability distribution;
-                if False, perform greedy decoding (take the most probable token).
-            top_k: In sampling mode, only consider the top-k most probable tokens.
-            top_p: In sampling mode, only consider tokens within the top-p probability mass
-                (nucleus sampling).
-            temperature: Softmax temperature for controlling randomness. Lower values make
-                the distribution more peaked, higher values make it more uniform.
+            encoder_outputs (torch.Tensor):
+                Encoded source representations, shape (src_seq_len, 1, d_model).
+            max_length (int):
+                Maximum number of tokens to generate.
+            do_sample (bool):
+                If True, sample from the probability distribution;
+                if False, use greedy decoding.
+            top_k (int):
+                Top-k sampling filter (only used if do_sample=True).
+            top_p (float):
+                Top-p (nucleus) sampling filter (only used if do_sample=True).
+            temperature (float):
+                Softmax temperature for controlling randomness.
 
         Returns:
-            A string containing the generated text with special tokens removed.
-
-        Note:
-            This function handles both deterministic (greedy) and stochastic (sampling)
-            decoding based on the do_sample parameter.
+            str: Generated text with special tokens removed.
         """
         start_token_id = self.tokenizer.cls_token_id or 101
         sep_token_id = self.tokenizer.sep_token_id or 102
@@ -470,27 +463,19 @@ class Seq2SeqReverser:
         """
         Implement beam search decoding for more optimal text generation.
 
-        Beam search maintains multiple candidate sequences at each step, expanding
-        each by considering the top-N next tokens, then keeping only the overall
-        top-N sequences to continue with. This reduces the risk of getting stuck
-        in suboptimal paths that greedy decoding might fall into.
-
         Args:
-            encoder_outputs: Tensor containing encoder representations with shape
-                (src_seq_len, batch_size=1, d_model).
-            max_length: Maximum number of tokens to generate before stopping.
-            num_beams: Number of beams (candidate sequences) to maintain at each step.
-                Higher values provide more thorough search but increase computation.
-            temperature: Temperature for softmax over logits. Lower values make the
-                distribution more peaked, higher values make it more uniform.
+            encoder_outputs (torch.Tensor):
+                Encoded source representations, shape (src_seq_len, 1, d_model).
+            max_length (int):
+                Maximum number of tokens to generate before stopping.
+            num_beams (int):
+                Number of beams (candidate sequences) to keep at each step.
+            temperature (float):
+                Softmax temperature for controlling randomness in the distribution.
 
         Returns:
-            A string containing the generated text from the highest-scoring beam,
-            with special tokens removed.
-
-        Note:
-            This is a simple beam search implementation that tracks log probabilities
-            and handles early stopping when sequences are complete.
+            str: Generated text from the highest-scoring beam,
+                 with special tokens removed.
         """
         start_token_id = self.tokenizer.cls_token_id or 101
         sep_token_id = self.tokenizer.sep_token_id or 102
@@ -544,28 +529,19 @@ class Seq2SeqReverser:
         top_p: float,
     ) -> int:
         """
-        Sample a token from a distribution of logits using top-k and/or nucleus (top-p) filtering.
-
-        This method implements controlled sampling strategies to balance diversity and quality:
-        1. Top-K filtering: Only consider the top-k most likely tokens
-        2. Nucleus (Top-p) filtering: Only consider tokens comprising the top-p probability mass
-
-        The method handles numerical stability issues and ensures a valid probability distribution
-        before sampling.
+        Sample a token ID from logits using top-k and/or top-p (nucleus) filtering.
 
         Args:
-            logits: Raw logits tensor from the model with shape (vocab_size,)
-            top_k: Only consider the top-k tokens with highest probability. If <= 0,
-                all tokens are considered.
-            top_p: Only consider tokens whose cumulative probability exceeds this threshold.
-                Must be in range (0.0, 1.0]. If 1.0, all tokens are considered.
+            logits (torch.Tensor):
+                Raw logits of shape (vocab_size,).
+            top_k (int):
+                Only consider top-k tokens. If <= 0, disable top-k filtering.
+            top_p (float):
+                Nucleus filtering; only consider tokens with cumulative probability
+                above this threshold in sorted order. Must be in (0, 1].
 
         Returns:
-            An integer token ID sampled from the filtered distribution.
-
-        Note:
-            This implementation includes safeguards against numerical instabilities
-            like NaN, infinity, or zero-sum probability distributions.
+            int: Sampled token ID.
         """
         logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
 
@@ -603,17 +579,11 @@ class Seq2SeqReverser:
     @torch._dynamo.disable
     def save_model(self, save_dir: str) -> None:
         """
-        Saves the model + config + tokenizer.
-
-        This method saves the model state, configuration, and tokenizer to disk.
-        It disables torch.compile if you're on PyTorch 2.0, so state_dict() won't break.
+        Save the model state and tokenizer to disk.
 
         Args:
-            save_dir: Directory path where to save the model
-
-        Note:
-            We no longer save optimizer state to avoid reference issues
-            when loading/saving multiple times.
+            save_dir (str):
+                Directory path where the model and config will be saved.
         """
         os.makedirs(save_dir, exist_ok=True)
         save_path = os.path.join(save_dir, "reverser_seq2seq_state.pt")
@@ -632,20 +602,13 @@ class Seq2SeqReverser:
     @torch._dynamo.disable
     def load_model(self, load_dir: str, device: Optional[str] = None) -> None:
         """
-        Loads model + optimizer state into this *existing* instance.
-
-        This method loads a previously saved model state into the current instance.
-        It handles device mapping and configuration updates automatically.
+        Load model and tokenizer states from disk into the current instance.
 
         Args:
-            load_dir: Directory path from which to load the model
-            device: The device to use ('cuda', 'cpu', or None to auto-select)
-
-        IMPORTANT:
-          - This requires that your constructor used the same architecture
-            hyperparameters (d_model, nhead, etc.) that were in the checkpoint.
-          - If you want to load a different config from the checkpoint,
-            see the alternative approach in the Appendix below.
+            load_dir (str):
+                Directory path where the model is saved.
+            device (Optional[str]):
+                Device to load the model on ('cuda', 'cpu', or None to auto-select).
         """
         if device is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
