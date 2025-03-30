@@ -326,44 +326,279 @@ class Seq2SeqReverser:
         return loss.item()
 
     @torch.no_grad()
-    def generate_text(self, source_rep: List[List[float]], max_length: int = 40) -> str:
+    def generate_text(
+        self,
+        source_rep: List[List[float]],
+        max_length: int = 40,
+        num_beams: int = 1,
+        do_sample: bool = False,
+        top_k: int = 50,
+        top_p: float = 0.9,
+        temperature: float = 1.0,
+    ) -> str:
         """
-        Generate text from source embeddings using the trained model.
+        Generate text from source embeddings using beam search, greedy decoding, or sampling.
 
-        This method uses autoregressive generation: at each step, it predicts the next
-        token based on previously generated tokens and the source embeddings.
+        This method takes encoded vector representations and generates human-readable text
+        by decoding them through the sequence-to-sequence model. It supports multiple decoding
+        strategies to balance between deterministic outputs and creative diversity.
 
         Args:
-            source_rep: List of lists of floats representing the source embeddings
-                Shape: (src_seq_len, d_model)
-            max_length: Maximum number of tokens to generate
+            source_rep: Source embeddings matrix with shape (src_seq_len, d_model).
+                Each row represents a token's embedding in the source sequence.
+            max_length: Maximum number of tokens to generate before stopping.
+            num_beams: Number of beams for beam search. Values > 1 activate beam search,
+                which performs a breadth-first search through the probability space.
+            do_sample: Whether to sample from the probability distribution (True) or
+                use greedy decoding (False). Only applies when num_beams=1.
+            top_k: In sampling mode, only consider the top-k most probable tokens.
+            top_p: In sampling mode, only consider tokens within the top-p probability mass
+                (nucleus sampling).
+            temperature: Controls randomness in sampling. Higher values (e.g., 1.5)
+                produce more diverse outputs, lower values (e.g., 0.7) produce more
+                deterministic outputs. Range: (0.0, inf).
 
         Returns:
-            The generated text string
+            A string containing the generated text with special tokens removed.
+
+        Note:
+            For maximum determinism, use greedy decoding (num_beams=1, do_sample=False).
+            For maximum diversity, use sampling with higher temperature values.
+            For a balance of quality and diversity, beam search (num_beams=3-5) often works well.
         """
         self.decoder.eval()
         if not source_rep:
             return ""
+
         encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
 
-        start_token_id = self.tokenizer.cls_token_id or 101
-        current_input = torch.tensor([start_token_id], device=self.device).unsqueeze(1)
+        # Beam search with num_beams > 1
+        if num_beams > 1:
+            return self._beam_search(
+                encoder_outputs,
+                max_length=max_length,
+                num_beams=num_beams,
+                temperature=temperature,
+            )
+        else:
+            # Greedy or sampling decode
+            return self._sample_or_greedy_decode(
+                encoder_outputs,
+                max_length=max_length,
+                do_sample=do_sample,
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+            )
 
+    def _sample_or_greedy_decode(
+        self,
+        encoder_outputs: torch.Tensor,
+        max_length: int,
+        do_sample: bool,
+        top_k: int,
+        top_p: float,
+        temperature: float,
+    ) -> str:
+        """
+        Perform autoregressive text generation using either greedy decoding or sampling.
+
+        This internal method implements the core text generation loop for non-beam search
+        approaches. It iteratively builds the output sequence token-by-token until reaching
+        a stop condition (max length or end token).
+
+        Args:
+            encoder_outputs: Tensor containing encoder representations with shape
+                (src_seq_len, batch_size=1, d_model).
+            max_length: Maximum number of tokens to generate.
+            do_sample: If True, sample from the probability distribution;
+                if False, perform greedy decoding (take the most probable token).
+            top_k: In sampling mode, only consider the top-k most probable tokens.
+            top_p: In sampling mode, only consider tokens within the top-p probability mass
+                (nucleus sampling).
+            temperature: Softmax temperature for controlling randomness. Lower values make
+                the distribution more peaked, higher values make it more uniform.
+
+        Returns:
+            A string containing the generated text with special tokens removed.
+
+        Note:
+            This function handles both deterministic (greedy) and stochastic (sampling)
+            decoding based on the do_sample parameter.
+        """
+        start_token_id = self.tokenizer.cls_token_id or 101
+        sep_token_id = self.tokenizer.sep_token_id or 102
+
+        current_input = torch.tensor([start_token_id], device=self.device).unsqueeze(1)
         generated_tokens = []
+
         for _ in range(max_length):
             seq_len = current_input.size(0)
             tgt_mask = generate_subsequent_mask(seq_len, self.device)
             logits = self.decoder(encoder_outputs, current_input, tgt_mask)
-            logits_step = logits[-1, 0, :]
-            next_token_id = torch.argmax(F.log_softmax(logits_step, dim=-1)).item()
+            logits_step = logits[-1, 0, :]  # Shape: (vocab_size,)
+
+            # Apply temperature
+            logits_step = logits_step / max(temperature, 1e-8)
+
+            if do_sample:
+                # Top-k or nucleus sampling
+                next_token_id = self._sample_from_logits(
+                    logits_step, top_k=top_k, top_p=top_p
+                )
+            else:
+                # Greedy decoding
+                next_token_id = torch.argmax(logits_step, dim=-1).item()
+
             generated_tokens.append(next_token_id)
 
             next_token = torch.tensor([next_token_id], device=self.device).unsqueeze(1)
             current_input = torch.cat([current_input, next_token], dim=0)
-            if next_token_id == self.tokenizer.sep_token_id:
+
+            if next_token_id == sep_token_id:
                 break
 
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+
+    def _beam_search(
+        self,
+        encoder_outputs: torch.Tensor,
+        max_length: int,
+        num_beams: int,
+        temperature: float,
+    ) -> str:
+        """
+        Implement beam search decoding for more optimal text generation.
+
+        Beam search maintains multiple candidate sequences at each step, expanding
+        each by considering the top-N next tokens, then keeping only the overall
+        top-N sequences to continue with. This reduces the risk of getting stuck
+        in suboptimal paths that greedy decoding might fall into.
+
+        Args:
+            encoder_outputs: Tensor containing encoder representations with shape
+                (src_seq_len, batch_size=1, d_model).
+            max_length: Maximum number of tokens to generate before stopping.
+            num_beams: Number of beams (candidate sequences) to maintain at each step.
+                Higher values provide more thorough search but increase computation.
+            temperature: Temperature for softmax over logits. Lower values make the
+                distribution more peaked, higher values make it more uniform.
+
+        Returns:
+            A string containing the generated text from the highest-scoring beam,
+            with special tokens removed.
+
+        Note:
+            This is a simple beam search implementation that tracks log probabilities
+            and handles early stopping when sequences are complete.
+        """
+        start_token_id = self.tokenizer.cls_token_id or 101
+        sep_token_id = self.tokenizer.sep_token_id or 102
+
+        beams = [
+            (
+                torch.tensor([start_token_id], device=self.device).unsqueeze(1),
+                0.0,
+            )
+        ]
+
+        for _ in range(max_length):
+            new_beams = []
+            for tokens, log_prob in beams:
+                if tokens[-1].item() == sep_token_id:
+                    new_beams.append((tokens, log_prob))
+                    continue
+
+                seq_len = tokens.size(0)
+                tgt_mask = generate_subsequent_mask(seq_len, self.device)
+                logits = self.decoder(encoder_outputs, tokens, tgt_mask)
+                logits_step = logits[-1, 0, :] / max(temperature, 1e-8)
+
+                probs = F.log_softmax(logits_step, dim=-1)
+                top_probs, top_ids = probs.topk(num_beams)
+
+                for i in range(num_beams):
+                    next_id = top_ids[i].item()
+                    next_score = top_probs[i].item()
+                    new_tokens = torch.cat(
+                        [tokens, torch.tensor([[next_id]], device=self.device)], dim=0
+                    )
+                    new_beams.append((new_tokens, log_prob + next_score))
+
+            new_beams.sort(key=lambda b: b[1], reverse=True)
+            beams = new_beams[:num_beams]
+
+            all_finished = all(b[0][-1].item() == sep_token_id for b in beams)
+            if all_finished:
+                break
+
+        best_tokens, best_log_prob = max(beams, key=lambda b: b[1])
+        return self.tokenizer.decode(
+            best_tokens.squeeze(1).tolist(), skip_special_tokens=True
+        )
+
+    def _sample_from_logits(
+        self,
+        logits: torch.Tensor,
+        top_k: int,
+        top_p: float,
+    ) -> int:
+        """
+        Sample a token from a distribution of logits using top-k and/or nucleus (top-p) filtering.
+
+        This method implements controlled sampling strategies to balance diversity and quality:
+        1. Top-K filtering: Only consider the top-k most likely tokens
+        2. Nucleus (Top-p) filtering: Only consider tokens comprising the top-p probability mass
+
+        The method handles numerical stability issues and ensures a valid probability distribution
+        before sampling.
+
+        Args:
+            logits: Raw logits tensor from the model with shape (vocab_size,)
+            top_k: Only consider the top-k tokens with highest probability. If <= 0,
+                all tokens are considered.
+            top_p: Only consider tokens whose cumulative probability exceeds this threshold.
+                Must be in range (0.0, 1.0]. If 1.0, all tokens are considered.
+
+        Returns:
+            An integer token ID sampled from the filtered distribution.
+
+        Note:
+            This implementation includes safeguards against numerical instabilities
+            like NaN, infinity, or zero-sum probability distributions.
+        """
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+
+        probs = F.softmax(logits, dim=-1)
+
+        probs = torch.nan_to_num(probs, nan=0.0)
+        probs = torch.clamp(probs, min=0.0)
+
+        # Top-k filtering
+        if top_k > 0:
+            top_k_values, top_k_indices = torch.topk(probs, min(top_k, probs.size(-1)))
+            kth_value = top_k_values[-1].clone()
+            probs[probs < kth_value] = 0.0
+
+        # Nucleus (top-p) filtering
+        if top_p < 1.0:
+            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            sorted_mask = cumulative_probs > top_p
+            if sorted_mask.any():
+                first_idx = torch.where(cumulative_probs > top_p)[0][0].item()
+                sorted_mask[first_idx] = False
+            sorted_probs = sorted_probs * (~sorted_mask).float()
+            probs = torch.zeros_like(probs).scatter_(-1, sorted_indices, sorted_probs)
+
+        prob_sum = probs.sum()
+        if prob_sum > 0:
+            probs = probs / prob_sum
+        else:
+            probs = torch.ones_like(probs) / probs.size(-1)
+
+        next_token_id = torch.multinomial(probs, 1).item()
+        return next_token_id
 
     @torch._dynamo.disable
     def save_model(self, save_dir: str) -> None:
