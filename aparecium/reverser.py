@@ -256,6 +256,75 @@ class Seq2SeqReverser:
 
         return loss.item()
 
+    def train_step_batch(
+        self,
+        source_rep_batch: List[List[List[float]]],
+        target_text_batch: List[str],
+        max_source_length: int = 256,
+        max_target_length: int = 256,
+    ) -> float:
+        """
+        Batched teacher-forcing training step.
+
+        Args:
+            source_rep_batch: A list of source embedding matrices,
+                each shape: (src_seq_len_i, d_model). Typically length = batch_size.
+            target_text_batch: A list of target strings of length = batch_size.
+            max_source_length: Optional limit on source sequence length (truncate).
+            max_target_length: Optional limit on target sequence length (truncate).
+
+        Returns:
+            The loss value (float) for this batch.
+        """
+        self.decoder.train()
+        batch_size = len(source_rep_batch)
+        if batch_size == 0:
+            return 0.0
+
+        src_tensors = []
+        for rep in source_rep_batch:
+            rep = rep[:max_source_length]
+            t = torch.tensor(rep, dtype=torch.float32, device=self.device)
+            src_tensors.append(t)
+
+        encoder_outputs = torch.nn.utils.rnn.pad_sequence(
+            src_tensors, batch_first=False
+        )
+
+        encoded_targets = self.tokenizer(
+            target_text_batch,
+            padding=True,
+            truncation=True,
+            max_length=max_target_length,
+            return_tensors="pt",
+        )
+        target_tokens = encoded_targets["input_ids"].to(self.device)
+
+        if target_tokens.size(1) < 2:
+            return 0.0
+
+        dec_input = target_tokens[:, :-1]
+        dec_target = target_tokens[:, 1:]
+
+        dec_input = dec_input.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
+        dec_target = dec_target.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
+
+        seq_len = dec_input.size(0)
+        tgt_mask = generate_subsequent_mask(seq_len, self.device)
+
+        logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
+        vocab_size = logits.size(-1)
+
+        loss = self.criterion(
+            logits.view(-1, vocab_size),
+            dec_target.reshape(-1),
+        )
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()
+
     @torch.no_grad()
     def generate_text(self, source_rep: List[List[float]], max_length: int = 40) -> str:
         """
