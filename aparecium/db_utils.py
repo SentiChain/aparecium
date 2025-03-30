@@ -1,5 +1,5 @@
 """
-Database Utilities for SentiChain
+Database Utilities for Aparecium
 
 This module provides functionality for storing and retrieving sentence data
 and associated embeddings in an SQLite database. It includes:
@@ -10,20 +10,20 @@ and associated embeddings in an SQLite database. It includes:
 2. **TorchTensorAdapter**:
     - A helper class to serialize/deserialize PyTorch tensors to/from SQLite BLOB fields.
 
-3. **SentichainDB**:
+3. **ApareciumDB**:
     - A high-level database utility class that handles table creation, 
       insertion, and retrieval of sentences and their corresponding 
       matrices (NumPy arrays or PyTorch tensors).
 
 Typical usage includes:
-- Initializing a SentichainDB instance with a SQLite file path.
+- Initializing a ApareciumDB instance with a SQLite file path.
 - Storing batches of sentences and their embeddings.
 - Retrieving batches for a given block range.
 - Checking existence or size of a particular batch of data.
 
 Example:
 
-    from db_utils import SentichainDB, NumpyArrayAdapter, TorchTensorAdapter
+    from db_utils import ApareciumDB, NumpyArrayAdapter, TorchTensorAdapter
     import sqlite3
     import numpy as np
     import torch
@@ -35,7 +35,7 @@ Example:
     sqlite3.register_converter("BLOB", TorchTensorAdapter.convert)
 
     # Initialize the database
-    db = SentichainDB("data/my_database.db")
+    db = ApareciumDB("data/my_database.db")
 
     # Store a batch of sentences and matrices
     sentences = ["Hello world", "Another example"]
@@ -162,7 +162,7 @@ class TorchTensorAdapter:
         return torch.load(out)
 
 
-class SentichainDB:
+class ApareciumDB:
     """
     Database utility for storing and retrieving sentences and associated matrices.
 
@@ -188,9 +188,9 @@ class SentichainDB:
         conn (sqlite3.Connection): The active connection to the SQLite database.
     """
 
-    def __init__(self, db_path="data/sentichain.db"):
+    def __init__(self, db_path="data/aparecium.db"):
         """
-        Initialize a SentichainDB instance.
+        Initialize a ApareciumDB instance.
 
         Ensures that the specified directory for `db_path` exists,
         establishes a connection to the database, and creates the
@@ -199,7 +199,7 @@ class SentichainDB:
         Args:
             db_path (str, optional):
                 File path of the SQLite database.
-                Defaults to "data/sentichain.db".
+                Defaults to "data/aparecium.db".
         """
         # Ensure data directory exists
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -468,6 +468,6 @@ class SentichainDB:
         """
         Destructor to ensure the database connection is closed.
 
-        Automatically called when the `SentichainDB` instance is garbage-collected.
+        Automatically called when the `ApareciumDB` instance is garbage-collected.
         """
         self.close()
