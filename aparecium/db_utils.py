@@ -54,12 +54,12 @@ Example:
     db.close()
 """
 
-import os
-import sqlite3
-import torch
-import numpy as np
-import io
 from typing import List, Tuple, Optional, Any
+import os
+import io
+import sqlite3
+import torch  # type: ignore
+import numpy as np  # type: ignore
 
 
 class NumpyArrayAdapter:
