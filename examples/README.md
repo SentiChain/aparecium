@@ -12,7 +12,7 @@ This directory contains example scripts demonstrating how to use the Aparecium p
 
 ### Usage Costs
 - These examples make API calls to OpenAI's services, which incur costs based on:
-  - The model selected (e.g., GPT-4 is significantly more expensive than GPT-3.5)
+  - The model selected (e.g., gpt-o1-mini is significantly more expensive than gpt-4o-mini)
   - The number of tokens used per request
   - The frequency of API calls
 - Users should carefully review their OpenAI usage limits and pricing before running these examples
@@ -47,18 +47,18 @@ config.database.path = "data/generated_sentences.db"
 config.database.block_size = 20
 
 # Sentence generation settings
-config.generation.num_sentences = 1000
+config.generation.num_sentences = 10000
 config.generation.batch_size = 10
 config.generation.max_retries = 3
 config.generation.retry_delay = 1
 
 # Model training settings
-config.training.device = "cuda"  # or "cpu"
+config.training.device = "cpu"  # or "cuda"
 config.training.epochs = 5
 config.training.batch_size = 8
 config.training.block_start = 1
-config.training.block_end = 100
-config.training.block_size = 50
+config.training.block_end = 500
+config.training.block_size = 20
 config.training.model_save_dir = "models/seq2seqreverser"
 config.training.model_name = "example"
 config.training.vectorizer_model = "sentence-transformers/all-mpnet-base-v2"
