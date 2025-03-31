@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aparecium"
-version = "0.1.4"
-description = "Aparecium (named after the Harry Potter spell to reveal hidden writing) is a Python package for revealing text from embedding vectors processed by SentiChain."
+version = "0.2.0"
+description = "Aparecium is a Python package for revealing text from embedding vectors, particularly designed to work with SentiChain embeddings."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [

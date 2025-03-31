@@ -1,22 +1,82 @@
 # Aparecium
 
-Aparecium (named after the Harry Potter spell to reveal hidden writing) is a Python package for revealing text from embedding vectors processed by SentiChain. It provides tools to convert between text and vector representations, as well as reverse the embedding process to recover original text.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Installation
-
-```bash
-pip install aparecium
-```
+Aparecium is a Python package for revealing text from embedding vectors, particularly designed to work with SentiChain embeddings. Named after the Harry Potter spell that reveals hidden writing, Aparecium provides state-of-the-art tools for converting between text and vector representations, as well as reversing the embedding process to recover original text.
 
 ## Features
 
 - **Text Vectorization**: Convert text into dense vector representations using pre-trained transformer models
 - **Embedding Reversal**: Reconstruct original text from embedding vectors using a Transformer-based sequence-to-sequence architecture
 - **Seamless Integration**: Works with SentiChain embeddings to reveal hidden content
+- **Modern Architecture**: Built on PyTorch and Transformers for optimal performance
+- **Extensible Design**: Easy to integrate with custom models and architectures
 
-## Usage
+## Limitations & Caveats
 
-### Vectorizing Text
+- Complete reconstruction of original text from embeddings is not always guaranteed and depends heavily on the fidelity and nature of the embeddings.
+- For best results, ensure that the model and embeddings are aligned (e.g., same tokenization and dimension).
+- While Aparecium is designed for SentiChain embeddings, it can be adapted to other embedding pipelines if they provide a compatible dimensionality.
+
+## Model Architecture
+
+Aparecium employs a Transformer-based sequence-to-sequence architecture for text reconstruction. The model consists of:
+
+- **Input Layer**: Processes embedding vectors of shape (sequence_length, d_model)
+- **Embedding Layer**: Combines token and positional embeddings
+- **Transformer Decoder Stack**: Multiple decoder layers with multi-head attention
+- **Output Layer**: Projects decoder outputs to vocabulary space
+
+```mermaid
+graph TB
+    subgraph InputLayer["Input Layer"]
+        Input["Input Embeddings\n(seq_len × d_model)"]
+    end
+
+    subgraph EmbeddingLayer["Embedding Layer"]
+        TokenEmb["Token Embedding\n(vocab_size → d_model)"]
+        PosEmb["Positional Embedding\n(seq_len → d_model)"]
+        Combined["Combined Embeddings\n(d_model)"]
+        TokenEmb --> Combined
+        PosEmb --> Combined
+    end
+
+    subgraph DecoderStack["Transformer Decoder Stack"]
+        Dec1["Decoder Layer 1\n(nhead=8, dim_ff=2048)"]
+        Dec2["Decoder Layer 2\n(nhead=8, dim_ff=2048)"]
+        Dec1 --> Dec2
+    end
+
+    subgraph OutputLayer["Output Layer"]
+        FC["Linear Projection\n(d_model → vocab_size)"]
+        Output["Output Logits\n(seq_len × vocab_size)"]
+        FC --> Output
+    end
+
+    Input --> Dec1
+    Combined --> Dec1
+    Dec2 --> FC
+```
+
+## Installation
+
+### From PyPI
+
+```bash
+pip install aparecium
+```
+
+### From Source
+
+```bash
+git clone https://github.com/SentiChain/aparecium.git
+cd aparecium
+pip install -e .
+```
+
+## Quick Start
+
+### Text to Vector Conversion
 
 ```python
 from aparecium import Vectorizer
@@ -28,11 +88,10 @@ vectorizer = Vectorizer(model_name="sentence-transformers/all-mpnet-base-v2")
 text = "This is sample text to be vectorized."
 embedding_vectors = vectorizer.encode(text)
 
-# embedding_vectors is a 2D matrix of shape (sequence_length, embedding_dimension)
-# where sequence_length is the number of tokens in the text
+# embedding_vectors shape: (sequence_length, embedding_dimension)
 ```
 
-### Reversing Embeddings to Text
+### Vector to Text Reconstruction
 
 ```python
 from aparecium import Seq2SeqReverser
@@ -40,34 +99,49 @@ from aparecium import Seq2SeqReverser
 # Initialize the reverser
 reverser = Seq2SeqReverser()
 
-# If you have a trained model, load it
+# Load a pre-trained model (if available)
 # reverser.load_model("path/to/model_directory")
 
-# Reverse embedding vectors to text
-# The source_rep should be a list of lists containing float values (embedding vectors)
+# Reconstruct text from embedding vectors
 recovered_text = reverser.generate_text(source_rep)
-print(recovered_text)  # The text recovered from embeddings
+print(recovered_text)
 ```
 
-### Training a Reverser Model
+## Project Structure
 
-```python
-from aparecium import Seq2SeqReverser, Vectorizer
-
-# Initialize components
-vectorizer = Vectorizer()
-reverser = Seq2SeqReverser()
-
-# Generate embedding vectors from text
-text = "This is text to train with."
-embeddings = vectorizer.encode(text)
-
-# Train the reverser using the embeddings and original text
-loss = reverser.train_step(embeddings, text)
-
-# Save the trained model
-reverser.save_model("path/to/save/model")
 ```
+aparecium/
+├── aparecium/         # Main package directory
+├── examples/          # Example scripts
+├── tests/             # Unittest suite
+├── data/              # Data directory
+├── models/            # Model checkpoints and configurations
+└── logs/              # Training and evaluation logs
+```
+
+## Development Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/SentiChain/aparecium.git
+   cd aparecium
+   ```
+
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. Install development dependencies:
+   ```bash
+   pip install -e ".[dev]"
+   ```
+
+4. Run tests:
+   ```bash
+   pytest
+   ```
 
 ## Requirements
 
@@ -75,10 +149,29 @@ reverser.save_model("path/to/save/model")
 - PyTorch 2.5.1
 - Transformers 4.47.1
 - SentiChain 0.2.0
+- NumPy 1.26.4
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
 
 ## License
 
-MIT License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+If you use Aparecium in your research, please cite:
+
+```bibtex
+@software{aparecium2025,
+  author = {Chen, Edward},
+  title = {Aparecium: Text Reconstruction from Embedding Vectors},
+  year = {2025},
+  publisher = {GitHub},
+  url = {https://github.com/SentiChain/aparecium}
+}
+```
 
 ## Links
 
