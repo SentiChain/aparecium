@@ -27,6 +27,7 @@ Example:
 
 from typing import Optional, List
 import os
+from pathlib import Path
 import torch  # type: ignore
 import torch.nn as nn  # type: ignore
 import torch.optim as optim  # type: ignore
@@ -160,6 +161,66 @@ class Seq2SeqReverser:
     Provides training (with teacher forcing) and inference methods,
     as well as model saving/loading functionality.
     """
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_name: str = "SentiChain/aparecium-seq2seq-reverser",
+        device: Optional[str] = None,
+    ) -> "Seq2SeqReverser":
+        """
+        Load a pre-trained model from Hugging Face Hub.
+
+        Args:
+            model_name (str):
+                The name of the model on Hugging Face Hub.
+            device (Optional[str]):
+                The device to load the model on ('cuda', 'cpu', or None to auto-select).
+
+        Returns:
+            Seq2SeqReverser: A configured reverser instance with the pre-trained model
+
+        Raises:
+            ConfigurationError: If model loading fails.
+            ReverserError: If model state loading fails.
+        """
+        try:
+            # Create a cache directory in the user's home directory
+            cache_dir = (
+                Path.home() / ".aparecium" / "models" / model_name.replace("/", "_")
+            )
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+            # Check if model is already downloaded
+            model_file = cache_dir / "reverser_seq2seq_state.pt"
+            if not model_file.exists():
+                # Download model files from Hugging Face Hub
+                from huggingface_hub import hf_hub_download
+
+                files_to_download = [
+                    "reverser_seq2seq_state.pt",
+                    "tokenizer.json",
+                    "vocab.txt",
+                    "special_tokens_map.json",
+                    "tokenizer_config.json",
+                ]
+
+                for file in files_to_download:
+                    hf_hub_download(
+                        repo_id=model_name,
+                        filename=file,
+                        local_dir=cache_dir,
+                        force_download=False,
+                    )
+
+            # Create a new instance and load the model
+            instance = cls(device=device)
+            instance.load_model(str(cache_dir))
+            return instance
+
+        except Exception as e:
+            logger.error(f"Failed to load pre-trained model: {str(e)}")
+            raise ReverserError(f"Failed to load pre-trained model: {str(e)}")
 
     def __init__(
         self,

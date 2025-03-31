@@ -96,14 +96,29 @@ embedding_vectors = vectorizer.encode(text)
 ```python
 from aparecium import Seq2SeqReverser
 
+# Load the pre-trained model from Hugging Face Hub
+reverser = Seq2SeqReverser.from_pretrained("SentiChain/aparecium-seq2seq-reverser")
+
+# Reconstruct text from embedding vectors
+recovered_text = reverser.generate_text(embedding_vectors)
+print(recovered_text)
+```
+
+Note: The pre-trained model is specifically trained on crypto market-related sentences. For best results, use it with similar content.
+
+Alternatively, you can load the model from a local directory:
+
+```python
+from aparecium import Seq2SeqReverser
+
 # Initialize the reverser
 reverser = Seq2SeqReverser()
 
-# Load a pre-trained model (if available)
-# reverser.load_model("path/to/model_directory")
+# Load the pre-trained model from a local directory
+reverser.load_model("path/to/model/directory")
 
 # Reconstruct text from embedding vectors
-recovered_text = reverser.generate_text(source_rep)
+recovered_text = reverser.generate_text(embedding_vectors)
 print(recovered_text)
 ```
 
