@@ -23,8 +23,10 @@ env/
 \#*\#
 .DS_Store
 
-# Ignore files in data and models directories
+# Ignore files in data, models, and logs directories
 data/*
 !data/.gitkeep
 models/*
 !models/.gitkeep
+logs/*
+!logs/.gitkeep

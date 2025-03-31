@@ -27,7 +27,6 @@ Example:
 
 from typing import Optional, List
 import os
-import logging
 import torch  # type: ignore
 import torch.nn as nn  # type: ignore
 import torch.optim as optim  # type: ignore
@@ -35,7 +34,12 @@ import torch.nn.functional as F  # type: ignore
 from transformers import AutoTokenizer  # type: ignore
 import torch._dynamo  # type: ignore
 
-logger = logging.getLogger(__name__)
+from .logger import logger  # type: ignore
+from .exceptions import (  # type: ignore
+    ReverserError,
+    ConfigurationError,
+    DataProcessingError,
+)
 
 
 def generate_subsequent_mask(sz: int, device: torch.device) -> torch.Tensor:
@@ -185,35 +189,56 @@ class Seq2SeqReverser:
                 Learning rate for the optimizer.
             device (Optional[str]):
                 The device to use ('cuda', 'cpu', or None for auto-select).
+
+        Raises:
+            ConfigurationError: If model initialization fails.
+            ReverserError: If tokenizer or model creation fails.
         """
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device)
+        try:
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(device)
+            logger.info(f"Initializing Seq2SeqReverser on device: {device}")
 
-        # Use the same tokenizer that was used for the embedding model
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            # Use the same tokenizer that was used for the embedding model
+            logger.debug(f"Loading tokenizer from {model_name}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        # Create the decoder
-        vocab_size = len(self.tokenizer)
-        self.decoder = TransformerSeq2SeqModel(
-            vocab_size=vocab_size,
-            d_model=d_model,
-            num_decoder_layers=num_decoder_layers,
-            nhead=nhead,
-            dim_feedforward=dim_feedforward,
-        ).to(self.device)
+            # Create the decoder
+            vocab_size = len(self.tokenizer)
+            logger.debug(
+                f"Creating decoder with vocab_size={vocab_size}, d_model={d_model}"
+            )
+            self.decoder = TransformerSeq2SeqModel(
+                vocab_size=vocab_size,
+                d_model=d_model,
+                num_decoder_layers=num_decoder_layers,
+                nhead=nhead,
+                dim_feedforward=dim_feedforward,
+            ).to(self.device)
 
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_token_id)
-        self.optimizer = optim.AdamW(self.decoder.parameters(), lr=lr)
+            self.criterion = nn.CrossEntropyLoss(
+                ignore_index=self.tokenizer.pad_token_id
+            )
+            self.optimizer = optim.AdamW(self.decoder.parameters(), lr=lr)
 
-        self.config = {
-            "model_name": model_name,
-            "d_model": d_model,
-            "num_decoder_layers": num_decoder_layers,
-            "nhead": nhead,
-            "dim_feedforward": dim_feedforward,
-            "lr": lr,
-        }
+            self.config = {
+                "model_name": model_name,
+                "d_model": d_model,
+                "num_decoder_layers": num_decoder_layers,
+                "nhead": nhead,
+                "dim_feedforward": dim_feedforward,
+                "lr": lr,
+            }
+            logger.info("Seq2SeqReverser initialized successfully")
+        except OSError as e:
+            logger.error(f"Failed to initialize model: {str(e)}")
+            raise ConfigurationError(f"Failed to initialize model: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error during model initialization: {str(e)}")
+            raise ReverserError(
+                f"Unexpected error during model initialization: {str(e)}"
+            )
 
     def train_step(self, source_rep: List[List[float]], target_text: str) -> float:
         """
@@ -227,37 +252,53 @@ class Seq2SeqReverser:
 
         Returns:
             float: The training loss for this step.
+
+        Raises:
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If training step fails due to model error.
         """
-        self.decoder.train()
-        if not source_rep:
-            return 0.0
+        try:
+            self.decoder.train()
+            if not source_rep:
+                logger.warning(
+                    "Empty source representation provided, returning 0.0 loss"
+                )
+                return 0.0
 
-        encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
+            encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
 
-        target_tokens = self.tokenizer.encode(
-            target_text, return_tensors="pt", truncation=True, max_length=256
-        ).to(self.device)
-        target_tokens = target_tokens.squeeze(0)
-        if target_tokens.size(0) < 2:
-            return 0.0
+            target_tokens = self.tokenizer.encode(
+                target_text, return_tensors="pt", truncation=True, max_length=256
+            ).to(self.device)
+            target_tokens = target_tokens.squeeze(0)
+            if target_tokens.size(0) < 2:
+                logger.warning("Target text too short, returning 0.0 loss")
+                return 0.0
 
-        dec_input = target_tokens[:-1].unsqueeze(1)
-        dec_target = target_tokens[1:].unsqueeze(1)
+            dec_input = target_tokens[:-1].unsqueeze(1)
+            dec_target = target_tokens[1:].unsqueeze(1)
 
-        seq_len = dec_input.size(0)
-        tgt_mask = generate_subsequent_mask(seq_len, self.device)
+            seq_len = dec_input.size(0)
+            tgt_mask = generate_subsequent_mask(seq_len, self.device)
 
-        logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
-        vocab_size = logits.size(-1)
-        logits_flat = logits.view(-1, vocab_size)
-        dec_target_flat = dec_target.view(-1)
+            logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
+            vocab_size = logits.size(-1)
+            logits_flat = logits.view(-1, vocab_size)
+            dec_target_flat = dec_target.view(-1)
 
-        loss = self.criterion(logits_flat, dec_target_flat)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            loss = self.criterion(logits_flat, dec_target_flat)
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
 
-        return loss.item()
+            logger.debug(f"Training step completed with loss: {loss.item():.4f}")
+            return loss.item()
+        except ValueError as e:
+            logger.error(f"Invalid input data in training step: {str(e)}")
+            raise DataProcessingError(f"Invalid input data in training step: {str(e)}")
+        except Exception as e:
+            logger.error(f"Training step failed: {str(e)}")
+            raise ReverserError(f"Training step failed: {str(e)}")
 
     def train_step_batch(
         self,
@@ -281,55 +322,73 @@ class Seq2SeqReverser:
 
         Returns:
             float: The loss value for this batch.
+
+        Raises:
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If batch training step fails due to model error.
         """
-        self.decoder.train()
-        batch_size = len(source_rep_batch)
-        if batch_size == 0:
-            return 0.0
+        try:
+            self.decoder.train()
+            batch_size = len(source_rep_batch)
+            if batch_size == 0:
+                logger.warning("Empty batch provided, returning 0.0 loss")
+                return 0.0
 
-        src_tensors = []
-        for rep in source_rep_batch:
-            rep = rep[:max_source_length]
-            t = torch.tensor(rep, dtype=torch.float32, device=self.device)
-            src_tensors.append(t)
+            logger.debug(f"Processing batch of size {batch_size}")
 
-        encoder_outputs = torch.nn.utils.rnn.pad_sequence(
-            src_tensors, batch_first=False
-        )
+            src_tensors = []
+            for rep in source_rep_batch:
+                rep = rep[:max_source_length]
+                t = torch.tensor(rep, dtype=torch.float32, device=self.device)
+                src_tensors.append(t)
 
-        encoded_targets = self.tokenizer(
-            target_text_batch,
-            padding=True,
-            truncation=True,
-            max_length=max_target_length,
-            return_tensors="pt",
-        )
-        target_tokens = encoded_targets["input_ids"].to(self.device)
+            encoder_outputs = torch.nn.utils.rnn.pad_sequence(
+                src_tensors, batch_first=False
+            )
 
-        if target_tokens.size(1) < 2:
-            return 0.0
+            encoded_targets = self.tokenizer(
+                target_text_batch,
+                padding=True,
+                truncation=True,
+                max_length=max_target_length,
+                return_tensors="pt",
+            )
+            target_tokens = encoded_targets["input_ids"].to(self.device)
 
-        dec_input = target_tokens[:, :-1]
-        dec_target = target_tokens[:, 1:]
+            if target_tokens.size(1) < 2:
+                logger.warning("All target texts too short, returning 0.0 loss")
+                return 0.0
 
-        dec_input = dec_input.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
-        dec_target = dec_target.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
+            dec_input = target_tokens[:, :-1]
+            dec_target = target_tokens[:, 1:]
 
-        seq_len = dec_input.size(0)
-        tgt_mask = generate_subsequent_mask(seq_len, self.device)
+            dec_input = dec_input.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
+            dec_target = dec_target.transpose(0, 1)  # (tgt_seq_len-1, batch_size)
 
-        logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
-        vocab_size = logits.size(-1)
+            seq_len = dec_input.size(0)
+            tgt_mask = generate_subsequent_mask(seq_len, self.device)
 
-        loss = self.criterion(
-            logits.view(-1, vocab_size),
-            dec_target.reshape(-1),
-        )
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+            logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
+            vocab_size = logits.size(-1)
 
-        return loss.item()
+            loss = self.criterion(
+                logits.view(-1, vocab_size),
+                dec_target.reshape(-1),
+            )
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            logger.debug(f"Batch training step completed with loss: {loss.item():.4f}")
+            return loss.item()
+        except ValueError as e:
+            logger.error(f"Invalid input data in batch training step: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in batch training step: {str(e)}"
+            )
+        except Exception as e:
+            logger.error(f"Batch training step failed: {str(e)}")
+            raise ReverserError(f"Batch training step failed: {str(e)}")
 
     @torch.no_grad()
     def generate_text(
@@ -363,31 +422,53 @@ class Seq2SeqReverser:
 
         Returns:
             str: The generated text, with special tokens removed.
+
+        Raises:
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If text generation fails due to model error.
         """
-        self.decoder.eval()
-        if not source_rep:
-            return ""
+        try:
+            self.decoder.eval()
+            if not source_rep:
+                logger.warning(
+                    "Empty source representation provided, returning empty string"
+                )
+                return ""
 
-        encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
+            logger.debug(
+                f"Generating text with max_length={max_length}, num_beams={num_beams}, do_sample={do_sample}"
+            )
 
-        # Beam search with num_beams > 1
-        if num_beams > 1:
-            return self._beam_search(
-                encoder_outputs,
-                max_length=max_length,
-                num_beams=num_beams,
-                temperature=temperature,
+            encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
+
+            # Beam search with num_beams > 1
+            if num_beams > 1:
+                logger.debug("Using beam search for text generation")
+                return self._beam_search(
+                    encoder_outputs,
+                    max_length=max_length,
+                    num_beams=num_beams,
+                    temperature=temperature,
+                )
+            else:
+                # Greedy or sampling decode
+                logger.debug("Using greedy/sampling decode for text generation")
+                return self._sample_or_greedy_decode(
+                    encoder_outputs,
+                    max_length=max_length,
+                    do_sample=do_sample,
+                    top_k=top_k,
+                    top_p=top_p,
+                    temperature=temperature,
+                )
+        except ValueError as e:
+            logger.error(f"Invalid input data in text generation: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in text generation: {str(e)}"
             )
-        else:
-            # Greedy or sampling decode
-            return self._sample_or_greedy_decode(
-                encoder_outputs,
-                max_length=max_length,
-                do_sample=do_sample,
-                top_k=top_k,
-                top_p=top_p,
-                temperature=temperature,
-            )
+        except Exception as e:
+            logger.error(f"Text generation failed: {str(e)}")
+            raise ReverserError(f"Text generation failed: {str(e)}")
 
     def _sample_or_greedy_decode(
         self,
@@ -418,40 +499,66 @@ class Seq2SeqReverser:
 
         Returns:
             str: Generated text with special tokens removed.
+
+        Raises:
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If decoding fails due to model error.
         """
-        start_token_id = self.tokenizer.cls_token_id or 101
-        sep_token_id = self.tokenizer.sep_token_id or 102
+        try:
+            start_token_id = self.tokenizer.cls_token_id or 101
+            sep_token_id = self.tokenizer.sep_token_id or 102
 
-        current_input = torch.tensor([start_token_id], device=self.device).unsqueeze(1)
-        generated_tokens = []
+            logger.debug(
+                f"Starting {'sampling' if do_sample else 'greedy'} decode with max_length={max_length}"
+            )
 
-        for _ in range(max_length):
-            seq_len = current_input.size(0)
-            tgt_mask = generate_subsequent_mask(seq_len, self.device)
-            logits = self.decoder(encoder_outputs, current_input, tgt_mask)
-            logits_step = logits[-1, 0, :]  # Shape: (vocab_size,)
+            current_input = torch.tensor(
+                [start_token_id], device=self.device
+            ).unsqueeze(1)
+            generated_tokens = []
 
-            # Apply temperature
-            logits_step = logits_step / max(temperature, 1e-8)
+            for step in range(max_length):
+                seq_len = current_input.size(0)
+                tgt_mask = generate_subsequent_mask(seq_len, self.device)
+                logits = self.decoder(encoder_outputs, current_input, tgt_mask)
+                logits_step = logits[-1, 0, :]  # Shape: (vocab_size,)
 
-            if do_sample:
-                # Top-k or nucleus sampling
-                next_token_id = self._sample_from_logits(
-                    logits_step, top_k=top_k, top_p=top_p
-                )
-            else:
-                # Greedy decoding
-                next_token_id = torch.argmax(logits_step, dim=-1).item()
+                # Apply temperature
+                logits_step = logits_step / max(temperature, 1e-8)
 
-            generated_tokens.append(next_token_id)
+                if do_sample:
+                    # Top-k or nucleus sampling
+                    next_token_id = self._sample_from_logits(
+                        logits_step, top_k=top_k, top_p=top_p
+                    )
+                else:
+                    # Greedy decoding
+                    next_token_id = torch.argmax(logits_step, dim=-1).item()
 
-            next_token = torch.tensor([next_token_id], device=self.device).unsqueeze(1)
-            current_input = torch.cat([current_input, next_token], dim=0)
+                generated_tokens.append(next_token_id)
 
-            if next_token_id == sep_token_id:
-                break
+                next_token = torch.tensor(
+                    [next_token_id], device=self.device
+                ).unsqueeze(1)
+                current_input = torch.cat([current_input, next_token], dim=0)
 
-        return self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                if next_token_id == sep_token_id:
+                    logger.debug(f"Decoding finished at step {step + 1}")
+                    break
+
+            generated_text = self.tokenizer.decode(
+                generated_tokens, skip_special_tokens=True
+            )
+            logger.debug(f"Generated text with {len(generated_tokens)} tokens")
+            return generated_text
+        except ValueError as e:
+            logger.error(f"Invalid input data in text generation: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in text generation: {str(e)}"
+            )
+        except Exception as e:
+            logger.error(f"Decoding failed: {str(e)}")
+            raise ReverserError(f"Decoding failed: {str(e)}")
 
     def _beam_search(
         self,
@@ -476,51 +583,68 @@ class Seq2SeqReverser:
         Returns:
             str: Generated text from the highest-scoring beam,
                  with special tokens removed.
+
+        Raises:
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If beam search fails due to model error.
         """
-        start_token_id = self.tokenizer.cls_token_id or 101
-        sep_token_id = self.tokenizer.sep_token_id or 102
+        try:
+            start_token_id = self.tokenizer.cls_token_id or 101
+            sep_token_id = self.tokenizer.sep_token_id or 102
 
-        beams = [
-            (
-                torch.tensor([start_token_id], device=self.device).unsqueeze(1),
-                0.0,
+            logger.debug(f"Starting beam search with {num_beams} beams")
+
+            beams = [
+                (
+                    torch.tensor([start_token_id], device=self.device).unsqueeze(1),
+                    0.0,
+                )
+            ]
+
+            for step in range(max_length):
+                new_beams = []
+                for tokens, log_prob in beams:
+                    if tokens[-1].item() == sep_token_id:
+                        new_beams.append((tokens, log_prob))
+                        continue
+
+                    seq_len = tokens.size(0)
+                    tgt_mask = generate_subsequent_mask(seq_len, self.device)
+                    logits = self.decoder(encoder_outputs, tokens, tgt_mask)
+                    logits_step = logits[-1, 0, :] / max(temperature, 1e-8)
+
+                    probs = F.log_softmax(logits_step, dim=-1)
+                    top_probs, top_ids = probs.topk(num_beams)
+
+                    for i in range(num_beams):
+                        next_id = top_ids[i].item()
+                        next_score = top_probs[i].item()
+                        new_tokens = torch.cat(
+                            [tokens, torch.tensor([[next_id]], device=self.device)],
+                            dim=0,
+                        )
+                        new_beams.append((new_tokens, log_prob + next_score))
+
+                new_beams.sort(key=lambda b: b[1], reverse=True)
+                beams = new_beams[:num_beams]
+
+                all_finished = all(b[0][-1].item() == sep_token_id for b in beams)
+                if all_finished:
+                    logger.debug(f"Beam search finished at step {step + 1}")
+                    break
+
+            best_tokens, best_log_prob = max(beams, key=lambda b: b[1])
+            generated_text = self.tokenizer.decode(
+                best_tokens.squeeze(1).tolist(), skip_special_tokens=True
             )
-        ]
-
-        for _ in range(max_length):
-            new_beams = []
-            for tokens, log_prob in beams:
-                if tokens[-1].item() == sep_token_id:
-                    new_beams.append((tokens, log_prob))
-                    continue
-
-                seq_len = tokens.size(0)
-                tgt_mask = generate_subsequent_mask(seq_len, self.device)
-                logits = self.decoder(encoder_outputs, tokens, tgt_mask)
-                logits_step = logits[-1, 0, :] / max(temperature, 1e-8)
-
-                probs = F.log_softmax(logits_step, dim=-1)
-                top_probs, top_ids = probs.topk(num_beams)
-
-                for i in range(num_beams):
-                    next_id = top_ids[i].item()
-                    next_score = top_probs[i].item()
-                    new_tokens = torch.cat(
-                        [tokens, torch.tensor([[next_id]], device=self.device)], dim=0
-                    )
-                    new_beams.append((new_tokens, log_prob + next_score))
-
-            new_beams.sort(key=lambda b: b[1], reverse=True)
-            beams = new_beams[:num_beams]
-
-            all_finished = all(b[0][-1].item() == sep_token_id for b in beams)
-            if all_finished:
-                break
-
-        best_tokens, best_log_prob = max(beams, key=lambda b: b[1])
-        return self.tokenizer.decode(
-            best_tokens.squeeze(1).tolist(), skip_special_tokens=True
-        )
+            logger.debug(f"Generated text with log probability: {best_log_prob:.4f}")
+            return generated_text
+        except ValueError as e:
+            logger.error(f"Invalid input data in beam search: {str(e)}")
+            raise DataProcessingError(f"Invalid input data in beam search: {str(e)}")
+        except Exception as e:
+            logger.error(f"Beam search failed: {str(e)}")
+            raise ReverserError(f"Beam search failed: {str(e)}")
 
     def _sample_from_logits(
         self,
@@ -542,39 +666,57 @@ class Seq2SeqReverser:
 
         Returns:
             int: Sampled token ID.
+
+        Raises:
+            DataProcessingError: If logits are invalid or parameters are out of range.
+            ReverserError: If sampling fails due to model error.
         """
-        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+        try:
+            if top_p <= 0 or top_p > 1:
+                raise ValueError(f"top_p must be in (0, 1], got {top_p}")
 
-        probs = F.softmax(logits, dim=-1)
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
 
-        probs = torch.nan_to_num(probs, nan=0.0)
-        probs = torch.clamp(probs, min=0.0)
+            probs = F.softmax(logits, dim=-1)
 
-        # Top-k filtering
-        if top_k > 0:
-            top_k_values, top_k_indices = torch.topk(probs, min(top_k, probs.size(-1)))
-            kth_value = top_k_values[-1].clone()
-            probs[probs < kth_value] = 0.0
+            probs = torch.nan_to_num(probs, nan=0.0)
+            probs = torch.clamp(probs, min=0.0)
 
-        # Nucleus (top-p) filtering
-        if top_p < 1.0:
-            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-            sorted_mask = cumulative_probs > top_p
-            if sorted_mask.any():
-                first_idx = torch.where(cumulative_probs > top_p)[0][0].item()
-                sorted_mask[first_idx] = False
-            sorted_probs = sorted_probs * (~sorted_mask).float()
-            probs = torch.zeros_like(probs).scatter_(-1, sorted_indices, sorted_probs)
+            # Top-k filtering
+            if top_k > 0:
+                top_k_values, top_k_indices = torch.topk(
+                    probs, min(top_k, probs.size(-1))
+                )
+                kth_value = top_k_values[-1].clone()
+                probs[probs < kth_value] = 0.0
 
-        prob_sum = probs.sum()
-        if prob_sum > 0:
-            probs = probs / prob_sum
-        else:
-            probs = torch.ones_like(probs) / probs.size(-1)
+            # Nucleus (top-p) filtering
+            if top_p < 1.0:
+                sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_mask = cumulative_probs > top_p
+                if sorted_mask.any():
+                    first_idx = torch.where(cumulative_probs > top_p)[0][0].item()
+                    sorted_mask[first_idx] = False
+                sorted_probs = sorted_probs * (~sorted_mask).float()
+                probs = torch.zeros_like(probs).scatter_(
+                    -1, sorted_indices, sorted_probs
+                )
 
-        next_token_id = torch.multinomial(probs, 1).item()
-        return next_token_id
+            prob_sum = probs.sum()
+            if prob_sum > 0:
+                probs = probs / prob_sum
+            else:
+                probs = torch.ones_like(probs) / probs.size(-1)
+
+            next_token_id = torch.multinomial(probs, 1).item()
+            return next_token_id
+        except ValueError as e:
+            logger.error(f"Invalid parameters in sampling: {str(e)}")
+            raise DataProcessingError(f"Invalid parameters in sampling: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to sample from logits: {str(e)}")
+            raise ReverserError(f"Failed to sample from logits: {str(e)}")
 
     @torch._dynamo.disable
     def save_model(self, save_dir: str) -> None:
@@ -584,20 +726,31 @@ class Seq2SeqReverser:
         Args:
             save_dir (str):
                 Directory path where the model and config will be saved.
+
+        Raises:
+            ConfigurationError: If saving fails due to invalid directory or permissions.
+            ReverserError: If model state saving fails.
         """
-        os.makedirs(save_dir, exist_ok=True)
-        save_path = os.path.join(save_dir, "reverser_seq2seq_state.pt")
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, "reverser_seq2seq_state.pt")
 
-        torch.save(
-            {
-                "decoder_state_dict": self.decoder.state_dict(),
-                "config": self.config,
-            },
-            save_path,
-        )
+            torch.save(
+                {
+                    "decoder_state_dict": self.decoder.state_dict(),
+                    "config": self.config,
+                },
+                save_path,
+            )
 
-        self.tokenizer.save_pretrained(save_dir)
-        logger.info(f"Model saved to {save_path}")
+            self.tokenizer.save_pretrained(save_dir)
+            logger.info(f"Model saved to {save_path}")
+        except OSError as e:
+            logger.error(f"Failed to create save directory or save model: {str(e)}")
+            raise ConfigurationError(f"Failed to save model: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to save model state: {str(e)}")
+            raise ReverserError(f"Failed to save model state: {str(e)}")
 
     @torch._dynamo.disable
     def load_model(self, load_dir: str, device: Optional[str] = None) -> None:
@@ -609,23 +762,43 @@ class Seq2SeqReverser:
                 Directory path where the model is saved.
             device (Optional[str]):
                 Device to load the model on ('cuda', 'cpu', or None to auto-select).
+
+        Raises:
+            ConfigurationError: If loading fails due to invalid directory or file.
+            ReverserError: If model state loading fails.
         """
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device)
+        try:
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(device)
+            logger.debug(f"Loading model on device: {device}")
 
-        load_path = os.path.join(load_dir, "reverser_seq2seq_state.pt")
-        checkpoint = torch.load(load_path, map_location=self.device)
+            load_path = os.path.join(load_dir, "reverser_seq2seq_state.pt")
+            if not os.path.exists(load_path):
+                logger.error(f"Model file not found at {load_path}")
+                raise ConfigurationError(f"Model file not found at {load_path}")
 
-        loaded_config = checkpoint.get("config", {})
-        self.config.update(loaded_config)
+            checkpoint = torch.load(
+                load_path, map_location=self.device, weights_only=True
+            )
 
-        self.tokenizer = AutoTokenizer.from_pretrained(load_dir)
+            loaded_config = checkpoint.get("config", {})
+            self.config.update(loaded_config)
 
-        self.decoder.load_state_dict(checkpoint["decoder_state_dict"])
+            self.tokenizer = AutoTokenizer.from_pretrained(load_dir)
 
-        self.decoder.to(self.device)
+            self.decoder.load_state_dict(checkpoint["decoder_state_dict"])
 
-        self.optimizer = optim.AdamW(self.decoder.parameters(), lr=self.config["lr"])
+            self.decoder.to(self.device)
 
-        logger.info(f"Model successfully loaded from {load_dir}")
+            self.optimizer = optim.AdamW(
+                self.decoder.parameters(), lr=self.config["lr"]
+            )
+
+            logger.info(f"Model successfully loaded from {load_dir}")
+        except OSError as e:
+            logger.error(f"Failed to load model file: {str(e)}")
+            raise ConfigurationError(f"Failed to load model file: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to load model state: {str(e)}")
+            raise ReverserError(f"Failed to load model state: {str(e)}")

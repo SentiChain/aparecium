@@ -61,6 +61,9 @@ import sqlite3
 import torch  # type: ignore
 import numpy as np  # type: ignore
 
+from .logger import logger  # type: ignore
+from .exceptions import DatabaseError, ConfigurationError  # type: ignore
+
 
 class NumpyArrayAdapter:
     """
@@ -159,7 +162,7 @@ class TorchTensorAdapter:
         """
         out = io.BytesIO(blob)
         out.seek(0)
-        return torch.load(out)
+        return torch.load(out, weights_only=True)
 
 
 class ApareciumDB:
@@ -200,15 +203,30 @@ class ApareciumDB:
             db_path (str, optional):
                 File path of the SQLite database.
                 Defaults to "data/aparecium.db".
+
+        Raises:
+            ConfigurationError: If the database path is invalid or directory creation fails.
+            DatabaseError: If database connection or table creation fails.
         """
-        # Ensure data directory exists
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        try:
+            # Ensure data directory exists
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
+            logger.debug(f"Initializing database at path: {db_path}")
 
-        self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+            self.db_path = db_path
+            self.conn = sqlite3.connect(db_path)
+            logger.info(f"Successfully connected to database at {db_path}")
 
-        # Create tables if they don't exist
-        self._create_tables()
+            # Create tables if they don't exist
+            self._create_tables()
+        except OSError as e:
+            logger.error(f"Failed to create database directory: {str(e)}")
+            raise ConfigurationError(
+                f"Invalid database path or directory creation failed: {str(e)}"
+            )
+        except sqlite3.Error as e:
+            logger.error(f"Database connection error: {str(e)}")
+            raise DatabaseError(f"Failed to connect to database: {str(e)}")
 
     def _create_tables(self):
         """
@@ -216,40 +234,50 @@ class ApareciumDB:
 
         This method also creates an index on `(block_start, block_end)` for
         potentially faster queries on that range.
+
+        Raises:
+            DatabaseError: If table creation fails.
         """
-        with self.conn:
-            # Create tables for blocks and transactions
-            self.conn.execute(
+        try:
+            with self.conn:
+                # Create tables for blocks and transactions
+                self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS sentences (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        block_start INTEGER,
+                        block_end INTEGER,
+                        sentence TEXT,
+                        block_number INTEGER,
+                        transaction_id TEXT
+                    )
                 """
-                CREATE TABLE IF NOT EXISTS sentences (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    block_start INTEGER,
-                    block_end INTEGER,
-                    sentence TEXT,
-                    block_number INTEGER,
-                    transaction_id TEXT
                 )
-            """
-            )
 
-            self.conn.execute(
+                self.conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS matrices (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sentence_id INTEGER,
+                        matrix BLOB,
+                        FOREIGN KEY (sentence_id) REFERENCES sentences (id)
+                    )
                 """
-                CREATE TABLE IF NOT EXISTS matrices (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sentence_id INTEGER,
-                    matrix BLOB,
-                    FOREIGN KEY (sentence_id) REFERENCES sentences (id)
                 )
-            """
-            )
 
-            # Create indices for faster retrieval
-            self.conn.execute(
+                # Create indices for faster retrieval
+                self.conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_block_range 
+                    ON sentences (block_start, block_end)
                 """
-                CREATE INDEX IF NOT EXISTS idx_block_range 
-                ON sentences (block_start, block_end)
-            """
-            )
+                )
+                logger.debug(
+                    "Successfully created/verified database tables and indices"
+                )
+        except sqlite3.Error as e:
+            logger.error(f"Failed to create database tables: {str(e)}")
+            raise DatabaseError(f"Failed to create database tables: {str(e)}")
 
     def store_batch(
         self,
@@ -284,47 +312,61 @@ class ApareciumDB:
 
         Raises:
             ValueError: If lengths of `sentences` and `matrices` differ.
+            DatabaseError: If database operations fail.
         """
+        if len(sentences) != len(matrices):
+            logger.error(
+                f"Mismatch in batch sizes: {len(sentences)} sentences vs {len(matrices)} matrices"
+            )
+            raise ValueError("Lengths of sentences and matrices must match")
+
         if block_numbers is None:
             block_numbers = [None] * len(sentences)
 
         if transaction_ids is None:
             transaction_ids = [None] * len(sentences)
 
-        with self.conn:
-            # First, store all sentences and get their IDs
-            sentence_ids = []
-            for i, sentence in enumerate(sentences):
-                cursor = self.conn.execute(
-                    """
-                    INSERT INTO sentences (block_start, block_end, sentence, block_number, transaction_id)
-                    VALUES (?, ?, ?, ?, ?)
-                """,
-                    (
-                        block_start,
-                        block_end,
-                        sentence,
-                        block_numbers[i],
-                        transaction_ids[i],
-                    ),
-                )
-                sentence_ids.append(cursor.lastrowid)
+        try:
+            with self.conn:
+                # First, store all sentences and get their IDs
+                sentence_ids = []
+                for i, sentence in enumerate(sentences):
+                    cursor = self.conn.execute(
+                        """
+                        INSERT INTO sentences (block_start, block_end, sentence, block_number, transaction_id)
+                        VALUES (?, ?, ?, ?, ?)
+                    """,
+                        (
+                            block_start,
+                            block_end,
+                            sentence,
+                            block_numbers[i],
+                            transaction_ids[i],
+                        ),
+                    )
+                    sentence_ids.append(cursor.lastrowid)
 
-            # Now store all matrices with their corresponding sentence IDs
-            for sentence_id, matrix in zip(sentence_ids, matrices):
-                # Determine type and convert accordingly
-                if isinstance(matrix, torch.Tensor):
-                    matrix_blob = TorchTensorAdapter.adapt(matrix)
-                else:
-                    matrix_blob = NumpyArrayAdapter.adapt(matrix)
+                # Now store all matrices with their corresponding sentence IDs
+                for sentence_id, matrix in zip(sentence_ids, matrices):
+                    # Determine type and convert accordingly
+                    if isinstance(matrix, torch.Tensor):
+                        matrix_blob = TorchTensorAdapter.adapt(matrix)
+                    else:
+                        matrix_blob = NumpyArrayAdapter.adapt(matrix)
 
-                self.conn.execute(
-                    """
-                    INSERT INTO matrices (sentence_id, matrix)
-                    VALUES (?, ?)
-                """,
-                    (sentence_id, matrix_blob),
+                    self.conn.execute(
+                        """
+                        INSERT INTO matrices (sentence_id, matrix)
+                        VALUES (?, ?)
+                    """,
+                        (sentence_id, matrix_blob),
+                    )
+                logger.debug(
+                    f"Successfully stored batch of {len(sentences)} sentences and matrices"
                 )
+        except sqlite3.Error as e:
+            logger.error(f"Failed to store batch in database: {str(e)}")
+            raise DatabaseError(f"Failed to store batch in database: {str(e)}")
 
     def retrieve_batch(
         self, block_start: int, block_end: int
@@ -348,55 +390,68 @@ class ApareciumDB:
                   - `matrices` is a list of deserialized NumPy arrays or PyTorch tensors
                     in the same order as `sentences`. If no matrix is found for a
                     particular sentence, `None` is placed in its position.
+
+        Raises:
+            DatabaseError: If database operations fail.
         """
-        with self.conn:
-            # First get all sentences in the block range
-            cursor = self.conn.execute(
+        try:
+            with self.conn:
+                # First get all sentences in the block range
+                cursor = self.conn.execute(
+                    """
+                    SELECT id, sentence
+                    FROM sentences
+                    WHERE block_start = ? AND block_end = ?
+                """,
+                    (block_start, block_end),
+                )
+
+                results = cursor.fetchall()
+                if not results:
+                    logger.debug(
+                        f"No data found for block range {block_start}-{block_end}"
+                    )
+                    return [], []
+
+                sentence_ids = [row[0] for row in results]
+                sentences = [row[1] for row in results]
+
+                # Now get all matrices for these sentence IDs
+                # Build a parameterized query with the right number of placeholders
+                placeholders = ",".join(["?"] * len(sentence_ids))
+                query = f"""
+                    SELECT sentence_id, matrix
+                    FROM matrices
+                    WHERE sentence_id IN ({placeholders})
+                    ORDER BY sentence_id
                 """
-                SELECT id, sentence
-                FROM sentences
-                WHERE block_start = ? AND block_end = ?
-            """,
-                (block_start, block_end),
-            )
 
-            results = cursor.fetchall()
-            if not results:
-                return [], []
+                cursor = self.conn.execute(query, sentence_ids)
+                matrix_results = cursor.fetchall()
 
-            sentence_ids = [row[0] for row in results]
-            sentences = [row[1] for row in results]
+                # Create a mapping from sentence_id to matrix for proper ordering
+                matrix_map = {row[0]: row[1] for row in matrix_results}
 
-            # Now get all matrices for these sentence IDs
-            # Build a parameterized query with the right number of placeholders
-            placeholders = ",".join(["?"] * len(sentence_ids))
-            query = f"""
-                SELECT sentence_id, matrix
-                FROM matrices
-                WHERE sentence_id IN ({placeholders})
-                ORDER BY sentence_id
-            """
+                # Order matrices to match the sentences
+                matrices = []
+                for sid in sentence_ids:
+                    if sid in matrix_map:
+                        # Try first as PyTorch tensor, fall back to NumPy
+                        try:
+                            matrix = TorchTensorAdapter.convert(matrix_map[sid])
+                        except:
+                            matrix = NumpyArrayAdapter.convert(matrix_map[sid])
+                        matrices.append(matrix)
+                    else:
+                        matrices.append(None)  # Handle missing matrices
 
-            cursor = self.conn.execute(query, sentence_ids)
-            matrix_results = cursor.fetchall()
-
-            # Create a mapping from sentence_id to matrix for proper ordering
-            matrix_map = {row[0]: row[1] for row in matrix_results}
-
-            # Order matrices to match the sentences
-            matrices = []
-            for sid in sentence_ids:
-                if sid in matrix_map:
-                    # Try first as PyTorch tensor, fall back to NumPy
-                    try:
-                        matrix = TorchTensorAdapter.convert(matrix_map[sid])
-                    except:
-                        matrix = NumpyArrayAdapter.convert(matrix_map[sid])
-                    matrices.append(matrix)
-                else:
-                    matrices.append(None)  # Handle missing matrices
-
-            return sentences, matrices
+                logger.debug(
+                    f"Successfully retrieved batch of {len(sentences)} sentences and matrices"
+                )
+                return sentences, matrices
+        except sqlite3.Error as e:
+            logger.error(f"Failed to retrieve batch from database: {str(e)}")
+            raise DatabaseError(f"Failed to retrieve batch from database: {str(e)}")
 
     def check_batch_exists(self, block_start: int, block_end: int) -> bool:
         """
@@ -412,19 +467,30 @@ class ApareciumDB:
             bool:
                 True if at least one sentence is stored with the specified block range,
                 False otherwise.
-        """
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                SELECT COUNT(*) 
-                FROM sentences
-                WHERE block_start = ? AND block_end = ?
-            """,
-                (block_start, block_end),
-            )
 
-            count = cursor.fetchone()[0]
-            return count > 0
+        Raises:
+            DatabaseError: If database operations fail.
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    SELECT COUNT(*) 
+                    FROM sentences
+                    WHERE block_start = ? AND block_end = ?
+                """,
+                    (block_start, block_end),
+                )
+
+                count = cursor.fetchone()[0]
+                exists = count > 0
+                logger.debug(
+                    f"Batch existence check for range {block_start}-{block_end}: {exists}"
+                )
+                return exists
+        except sqlite3.Error as e:
+            logger.error(f"Failed to check batch existence: {str(e)}")
+            raise DatabaseError(f"Failed to check batch existence: {str(e)}")
 
     def get_batch_size(self, block_start: int, block_end: int) -> int:
         """
@@ -439,19 +505,27 @@ class ApareciumDB:
         Returns:
             int:
                 The count of sentences stored for the specified block range.
-        """
-        with self.conn:
-            cursor = self.conn.execute(
-                """
-                SELECT COUNT(*) 
-                FROM sentences
-                WHERE block_start = ? AND block_end = ?
-            """,
-                (block_start, block_end),
-            )
 
-            count = cursor.fetchone()[0]
-            return count
+        Raises:
+            DatabaseError: If database operations fail.
+        """
+        try:
+            with self.conn:
+                cursor = self.conn.execute(
+                    """
+                    SELECT COUNT(*) 
+                    FROM sentences
+                    WHERE block_start = ? AND block_end = ?
+                """,
+                    (block_start, block_end),
+                )
+
+                count = cursor.fetchone()[0]
+                logger.debug(f"Batch size for range {block_start}-{block_end}: {count}")
+                return count
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get batch size: {str(e)}")
+            raise DatabaseError(f"Failed to get batch size: {str(e)}")
 
     def close(self):
         """
@@ -459,10 +533,18 @@ class ApareciumDB:
 
         This method can be called explicitly or will be invoked automatically
         when the object is garbage-collected via `__del__`.
+
+        Raises:
+            DatabaseError: If closing the connection fails.
         """
         if self.conn:
-            self.conn.close()
-            self.conn = None
+            try:
+                self.conn.close()
+                self.conn = None
+                logger.info("Database connection closed successfully")
+            except sqlite3.Error as e:
+                logger.error(f"Failed to close database connection: {str(e)}")
+                raise DatabaseError(f"Failed to close database connection: {str(e)}")
 
     def __del__(self):
         """

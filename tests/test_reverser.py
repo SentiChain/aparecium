@@ -598,7 +598,19 @@ class TestSeq2SeqReverser(unittest.TestCase):
     @patch("aparecium.reverser.AutoTokenizer")
     @patch("aparecium.reverser.TransformerSeq2SeqModel")
     @patch("aparecium.reverser.optim.AdamW")
-    def test_load_model(self, mock_adamw, mock_model, mock_tokenizer, mock_torch_load):
+    @patch("aparecium.reverser.torch.save")
+    @patch("aparecium.reverser.os.makedirs")
+    @patch("aparecium.reverser.os.path.exists")
+    def test_load_model(
+        self,
+        mock_exists,
+        mock_makedirs,
+        mock_torch_save,
+        mock_adamw,
+        mock_model,
+        mock_tokenizer,
+        mock_torch_load,
+    ):
         """
         Test loading the model
         """
@@ -614,6 +626,9 @@ class TestSeq2SeqReverser(unittest.TestCase):
         mock_model_instance = MagicMock()
         mock_params = [torch.nn.Parameter(torch.randn(10, 10))]
         mock_model_instance.parameters.return_value = mock_params
+        mock_model_instance.state_dict.return_value = {
+            "layer1.weight": torch.rand(10, 10)
+        }
         mock_model.return_value = mock_model_instance
 
         # Setup mock optimizer
@@ -633,7 +648,13 @@ class TestSeq2SeqReverser(unittest.TestCase):
 
         # Create a temp directory for testing
         with tempfile.TemporaryDirectory() as tmpdirname:
-            # Call load_model
+            # First save the model
+            reverser.save_model(tmpdirname)
+
+            # Mock file existence check to return True
+            mock_exists.return_value = True
+
+            # Then load the model
             reverser.load_model(tmpdirname)
 
             # Check that model was loaded
