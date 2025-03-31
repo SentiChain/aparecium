@@ -17,6 +17,13 @@ from typing import List
 import torch  # type: ignore
 from transformers import AutoTokenizer, AutoModel  # type: ignore
 
+from .logger import logger  # type: ignore
+from .exceptions import (  # type: ignore
+    VectorizationError,
+    ConfigurationError,
+    DataProcessingError,
+)
+
 
 class Vectorizer:
     """
@@ -49,14 +56,33 @@ class Vectorizer:
             device (Optional[str]):
                 The device on which to run the model ('cpu', 'cuda', or None).
                 If None, uses 'cuda' if available, otherwise 'cpu'.
-        """
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(self.device)
-        self.model.eval()
+        Raises:
+            ConfigurationError: If model initialization fails due to invalid configuration.
+            VectorizationError: If model or tokenizer loading fails.
+        """
+        try:
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(device)
+            logger.info(f"Initializing Vectorizer on device: {device}")
+
+            logger.debug(f"Loading tokenizer from {model_name}")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+            logger.debug(f"Loading model from {model_name}")
+            self.model = AutoModel.from_pretrained(model_name).to(self.device)
+            self.model.eval()
+
+            logger.info("Vectorizer initialized successfully")
+        except OSError as e:
+            logger.error(f"Failed to initialize model: {str(e)}")
+            raise ConfigurationError(f"Failed to initialize model: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error during model initialization: {str(e)}")
+            raise VectorizationError(
+                f"Unexpected error during model initialization: {str(e)}"
+            )
 
     def encode(self, text: str, max_length: int = 256) -> List[List[float]]:
         """
@@ -80,16 +106,38 @@ class Vectorizer:
                 The `sequence_length` is determined by the number of tokens in
                 the input (up to `max_length`), and `embedding_dimension`
                 depends on the pre-trained model.
+
+        Raises:
+            DataProcessingError: If input text is invalid or max_length is out of range.
+            VectorizationError: If encoding fails due to model error.
         """
-        inputs = self.tokenizer(
-            text, return_tensors="pt", truncation=True, max_length=max_length
-        )
-        input_ids = inputs["input_ids"].to(self.device)
-        attention_mask = inputs["attention_mask"].to(self.device)
+        try:
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError("Input text must be a non-empty string")
+            if not isinstance(max_length, int) or max_length <= 0:
+                raise ValueError(
+                    f"max_length must be a positive integer, got {max_length}"
+                )
 
-        with torch.no_grad():
-            outputs = self.model(input_ids, attention_mask=attention_mask)
-            last_hidden_state = outputs.last_hidden_state
+            logger.debug(f"Encoding text with max_length={max_length}")
+            inputs = self.tokenizer(
+                text, return_tensors="pt", truncation=True, max_length=max_length
+            )
+            input_ids = inputs["input_ids"].to(self.device)
+            attention_mask = inputs["attention_mask"].to(self.device)
 
-        matrix = last_hidden_state[0].cpu().tolist()
-        return matrix
+            with torch.no_grad():
+                outputs = self.model(input_ids, attention_mask=attention_mask)
+                last_hidden_state = outputs.last_hidden_state
+
+            matrix = last_hidden_state[0].cpu().tolist()
+            logger.debug(
+                f"Successfully encoded text into {len(matrix)} token embeddings"
+            )
+            return matrix
+        except ValueError as e:
+            logger.error(f"Invalid input parameters: {str(e)}")
+            raise DataProcessingError(f"Invalid input parameters: {str(e)}")
+        except Exception as e:
+            logger.error(f"Text encoding failed: {str(e)}")
+            raise VectorizationError(f"Text encoding failed: {str(e)}")
