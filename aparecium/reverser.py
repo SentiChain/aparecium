@@ -27,17 +27,15 @@ Example:
 
 from typing import Optional, List
 import os
-import logging
 import torch  # type: ignore
 import torch.nn as nn  # type: ignore
 import torch.optim as optim  # type: ignore
 import torch.nn.functional as F  # type: ignore
 from transformers import AutoTokenizer  # type: ignore
 import torch._dynamo  # type: ignore
-from .logger import logger
-from .exceptions import ReverserError, ConfigurationError
 
-logger = logging.getLogger(__name__)
+from .logger import logger  # type: ignore
+from .exceptions import ReverserError, ConfigurationError  # type: ignore
 
 
 def generate_subsequent_mask(sz: int, device: torch.device) -> torch.Tensor:

@@ -60,8 +60,9 @@ import io
 import sqlite3
 import torch  # type: ignore
 import numpy as np  # type: ignore
-from .logger import logger
-from .exceptions import DatabaseError, ConfigurationError
+
+from .logger import logger  # type: ignore
+from .exceptions import DatabaseError, ConfigurationError  # type: ignore
 
 
 class NumpyArrayAdapter:
