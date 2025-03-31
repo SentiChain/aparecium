@@ -34,6 +34,8 @@ import torch.optim as optim  # type: ignore
 import torch.nn.functional as F  # type: ignore
 from transformers import AutoTokenizer  # type: ignore
 import torch._dynamo  # type: ignore
+from .logger import logger
+from .exceptions import ReverserError, ConfigurationError
 
 logger = logging.getLogger(__name__)
 
@@ -542,39 +544,50 @@ class Seq2SeqReverser:
 
         Returns:
             int: Sampled token ID.
+
+        Raises:
+            ReverserError: If sampling fails due to invalid logits or parameters.
         """
-        logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
+        try:
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
 
-        probs = F.softmax(logits, dim=-1)
+            probs = F.softmax(logits, dim=-1)
 
-        probs = torch.nan_to_num(probs, nan=0.0)
-        probs = torch.clamp(probs, min=0.0)
+            probs = torch.nan_to_num(probs, nan=0.0)
+            probs = torch.clamp(probs, min=0.0)
 
-        # Top-k filtering
-        if top_k > 0:
-            top_k_values, top_k_indices = torch.topk(probs, min(top_k, probs.size(-1)))
-            kth_value = top_k_values[-1].clone()
-            probs[probs < kth_value] = 0.0
+            # Top-k filtering
+            if top_k > 0:
+                top_k_values, top_k_indices = torch.topk(
+                    probs, min(top_k, probs.size(-1))
+                )
+                kth_value = top_k_values[-1].clone()
+                probs[probs < kth_value] = 0.0
 
-        # Nucleus (top-p) filtering
-        if top_p < 1.0:
-            sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-            sorted_mask = cumulative_probs > top_p
-            if sorted_mask.any():
-                first_idx = torch.where(cumulative_probs > top_p)[0][0].item()
-                sorted_mask[first_idx] = False
-            sorted_probs = sorted_probs * (~sorted_mask).float()
-            probs = torch.zeros_like(probs).scatter_(-1, sorted_indices, sorted_probs)
+            # Nucleus (top-p) filtering
+            if top_p < 1.0:
+                sorted_probs, sorted_indices = torch.sort(probs, descending=True)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                sorted_mask = cumulative_probs > top_p
+                if sorted_mask.any():
+                    first_idx = torch.where(cumulative_probs > top_p)[0][0].item()
+                    sorted_mask[first_idx] = False
+                sorted_probs = sorted_probs * (~sorted_mask).float()
+                probs = torch.zeros_like(probs).scatter_(
+                    -1, sorted_indices, sorted_probs
+                )
 
-        prob_sum = probs.sum()
-        if prob_sum > 0:
-            probs = probs / prob_sum
-        else:
-            probs = torch.ones_like(probs) / probs.size(-1)
+            prob_sum = probs.sum()
+            if prob_sum > 0:
+                probs = probs / prob_sum
+            else:
+                probs = torch.ones_like(probs) / probs.size(-1)
 
-        next_token_id = torch.multinomial(probs, 1).item()
-        return next_token_id
+            next_token_id = torch.multinomial(probs, 1).item()
+            return next_token_id
+        except Exception as e:
+            logger.error(f"Failed to sample from logits: {str(e)}")
+            raise ReverserError(f"Failed to sample from logits: {str(e)}")
 
     @torch._dynamo.disable
     def save_model(self, save_dir: str) -> None:
@@ -584,20 +597,31 @@ class Seq2SeqReverser:
         Args:
             save_dir (str):
                 Directory path where the model and config will be saved.
+
+        Raises:
+            ConfigurationError: If saving fails due to invalid directory or permissions.
+            ReverserError: If model state saving fails.
         """
-        os.makedirs(save_dir, exist_ok=True)
-        save_path = os.path.join(save_dir, "reverser_seq2seq_state.pt")
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            save_path = os.path.join(save_dir, "reverser_seq2seq_state.pt")
 
-        torch.save(
-            {
-                "decoder_state_dict": self.decoder.state_dict(),
-                "config": self.config,
-            },
-            save_path,
-        )
+            torch.save(
+                {
+                    "decoder_state_dict": self.decoder.state_dict(),
+                    "config": self.config,
+                },
+                save_path,
+            )
 
-        self.tokenizer.save_pretrained(save_dir)
-        logger.info(f"Model saved to {save_path}")
+            self.tokenizer.save_pretrained(save_dir)
+            logger.info(f"Model saved to {save_path}")
+        except OSError as e:
+            logger.error(f"Failed to create save directory or save model: {str(e)}")
+            raise ConfigurationError(f"Failed to save model: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to save model state: {str(e)}")
+            raise ReverserError(f"Failed to save model state: {str(e)}")
 
     @torch._dynamo.disable
     def load_model(self, load_dir: str, device: Optional[str] = None) -> None:
@@ -609,23 +633,41 @@ class Seq2SeqReverser:
                 Directory path where the model is saved.
             device (Optional[str]):
                 Device to load the model on ('cuda', 'cpu', or None to auto-select).
+
+        Raises:
+            ConfigurationError: If loading fails due to invalid directory or file.
+            ReverserError: If model state loading fails.
         """
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = torch.device(device)
+        try:
+            if device is None:
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = torch.device(device)
+            logger.debug(f"Loading model on device: {device}")
 
-        load_path = os.path.join(load_dir, "reverser_seq2seq_state.pt")
-        checkpoint = torch.load(load_path, map_location=self.device)
+            load_path = os.path.join(load_dir, "reverser_seq2seq_state.pt")
+            if not os.path.exists(load_path):
+                logger.error(f"Model file not found at {load_path}")
+                raise ConfigurationError(f"Model file not found at {load_path}")
 
-        loaded_config = checkpoint.get("config", {})
-        self.config.update(loaded_config)
+            checkpoint = torch.load(load_path, map_location=self.device)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(load_dir)
+            loaded_config = checkpoint.get("config", {})
+            self.config.update(loaded_config)
 
-        self.decoder.load_state_dict(checkpoint["decoder_state_dict"])
+            self.tokenizer = AutoTokenizer.from_pretrained(load_dir)
 
-        self.decoder.to(self.device)
+            self.decoder.load_state_dict(checkpoint["decoder_state_dict"])
 
-        self.optimizer = optim.AdamW(self.decoder.parameters(), lr=self.config["lr"])
+            self.decoder.to(self.device)
 
-        logger.info(f"Model successfully loaded from {load_dir}")
+            self.optimizer = optim.AdamW(
+                self.decoder.parameters(), lr=self.config["lr"]
+            )
+
+            logger.info(f"Model successfully loaded from {load_dir}")
+        except OSError as e:
+            logger.error(f"Failed to load model file: {str(e)}")
+            raise ConfigurationError(f"Failed to load model file: {str(e)}")
+        except Exception as e:
+            logger.error(f"Failed to load model state: {str(e)}")
+            raise ReverserError(f"Failed to load model state: {str(e)}")
