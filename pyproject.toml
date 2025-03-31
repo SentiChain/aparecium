@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aparecium"
-version = "0.2.1"
+version = "0.2.2"
 description = "Aparecium is a Python package for revealing text from embedding vectors, particularly designed to work with SentiChain embeddings."
 readme = "README.md"
 license = { file = "LICENSE" }
