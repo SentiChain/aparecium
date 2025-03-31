@@ -29,32 +29,32 @@ Aparecium employs a Transformer-based sequence-to-sequence architecture for text
 
 ```mermaid
 graph TB
-    subgraph InputLayer[Input Layer]
-        Input[Input Embeddings<br/>seq_len × d_model]
+    subgraph InputLayer["Input Layer"]
+        Input["Input Embeddings\n(seq_len × d_model)"]
     end
 
-    subgraph EmbeddingLayer[Embedding Layer]
-        TokenEmb[Token Embedding<br/>vocab_size → d_model]
-        PosEmb[Positional Embedding<br/>seq_len → d_model]
-        Add[+]
-        TokenEmb --> Add
-        PosEmb --> Add
+    subgraph EmbeddingLayer["Embedding Layer"]
+        TokenEmb["Token Embedding\n(vocab_size → d_model)"]
+        PosEmb["Positional Embedding\n(seq_len → d_model)"]
+        Combined["Combined Embeddings\n(d_model)"]
+        TokenEmb --> Combined
+        PosEmb --> Combined
     end
 
-    subgraph DecoderStack[Transformer Decoder Stack]
-        Dec1[Decoder Layer 1<br/>nhead=8, dim_ff=2048]
-        Dec2[Decoder Layer 2<br/>nhead=8, dim_ff=2048]
+    subgraph DecoderStack["Transformer Decoder Stack"]
+        Dec1["Decoder Layer 1\n(nhead=8, dim_ff=2048)"]
+        Dec2["Decoder Layer 2\n(nhead=8, dim_ff=2048)"]
         Dec1 --> Dec2
     end
 
-    subgraph OutputLayer[Output Layer]
-        FC[Linear Projection<br/>d_model → vocab_size]
-        Output[Output Logits<br/>seq_len × vocab_size]
+    subgraph OutputLayer["Output Layer"]
+        FC["Linear Projection\n(d_model → vocab_size)"]
+        Output["Output Logits\n(seq_len × vocab_size)"]
         FC --> Output
     end
 
     Input --> Dec1
-    Add --> Dec1
+    Combined --> Dec1
     Dec2 --> FC
 ```
 
@@ -177,4 +177,3 @@ If you use Aparecium in your research, please cite:
 
 - [GitHub Repository](https://github.com/SentiChain/aparecium)
 - [Issue Tracker](https://github.com/SentiChain/aparecium/issues)
-- [Documentation](https://github.com/SentiChain/aparecium/wiki)
