@@ -162,7 +162,7 @@ class TorchTensorAdapter:
         """
         out = io.BytesIO(blob)
         out.seek(0)
-        return torch.load(out)
+        return torch.load(out, weights_only=True)
 
 
 class ApareciumDB:

@@ -647,7 +647,9 @@ class Seq2SeqReverser:
                 logger.error(f"Model file not found at {load_path}")
                 raise ConfigurationError(f"Model file not found at {load_path}")
 
-            checkpoint = torch.load(load_path, map_location=self.device)
+            checkpoint = torch.load(
+                load_path, map_location=self.device, weights_only=True
+            )
 
             loaded_config = checkpoint.get("config", {})
             self.config.update(loaded_config)
