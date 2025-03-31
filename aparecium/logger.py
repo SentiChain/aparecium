@@ -18,6 +18,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 
 class ApareciumLogger:
@@ -82,7 +83,12 @@ class ApareciumLogger:
 
             log_file = log_dir / f'aparecium_{datetime.now().strftime("%Y%m%d")}.log'
 
-            file_handler = logging.FileHandler(log_file)
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,  # 10MB per file
+                backupCount=5,  # Keep 5 backup files
+                encoding="utf-8",
+            )
             file_handler.setLevel(file_log_level)
 
             console_handler = logging.StreamHandler(sys.stdout)
