@@ -35,7 +35,11 @@ from transformers import AutoTokenizer  # type: ignore
 import torch._dynamo  # type: ignore
 
 from .logger import logger  # type: ignore
-from .exceptions import ReverserError, ConfigurationError  # type: ignore
+from .exceptions import (  # type: ignore
+    ReverserError,
+    ConfigurationError,
+    DataProcessingError,
+)
 
 
 def generate_subsequent_mask(sz: int, device: torch.device) -> torch.Tensor:
@@ -250,7 +254,8 @@ class Seq2SeqReverser:
             float: The training loss for this step.
 
         Raises:
-            ReverserError: If training step fails due to invalid input or model error.
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If training step fails due to model error.
         """
         try:
             self.decoder.train()
@@ -288,6 +293,9 @@ class Seq2SeqReverser:
 
             logger.debug(f"Training step completed with loss: {loss.item():.4f}")
             return loss.item()
+        except ValueError as e:
+            logger.error(f"Invalid input data in training step: {str(e)}")
+            raise DataProcessingError(f"Invalid input data in training step: {str(e)}")
         except Exception as e:
             logger.error(f"Training step failed: {str(e)}")
             raise ReverserError(f"Training step failed: {str(e)}")
@@ -316,7 +324,8 @@ class Seq2SeqReverser:
             float: The loss value for this batch.
 
         Raises:
-            ReverserError: If batch training step fails due to invalid input or model error.
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If batch training step fails due to model error.
         """
         try:
             self.decoder.train()
@@ -372,6 +381,11 @@ class Seq2SeqReverser:
 
             logger.debug(f"Batch training step completed with loss: {loss.item():.4f}")
             return loss.item()
+        except ValueError as e:
+            logger.error(f"Invalid input data in batch training step: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in batch training step: {str(e)}"
+            )
         except Exception as e:
             logger.error(f"Batch training step failed: {str(e)}")
             raise ReverserError(f"Batch training step failed: {str(e)}")
@@ -410,7 +424,8 @@ class Seq2SeqReverser:
             str: The generated text, with special tokens removed.
 
         Raises:
-            ReverserError: If text generation fails due to invalid input or model error.
+            DataProcessingError: If input data is invalid or malformed.
+            ReverserError: If text generation fails due to model error.
         """
         try:
             self.decoder.eval()
@@ -446,6 +461,11 @@ class Seq2SeqReverser:
                     top_p=top_p,
                     temperature=temperature,
                 )
+        except ValueError as e:
+            logger.error(f"Invalid input data in text generation: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in text generation: {str(e)}"
+            )
         except Exception as e:
             logger.error(f"Text generation failed: {str(e)}")
             raise ReverserError(f"Text generation failed: {str(e)}")
@@ -481,6 +501,7 @@ class Seq2SeqReverser:
             str: Generated text with special tokens removed.
 
         Raises:
+            DataProcessingError: If input data is invalid or malformed.
             ReverserError: If decoding fails due to model error.
         """
         try:
@@ -530,6 +551,11 @@ class Seq2SeqReverser:
             )
             logger.debug(f"Generated text with {len(generated_tokens)} tokens")
             return generated_text
+        except ValueError as e:
+            logger.error(f"Invalid input data in text generation: {str(e)}")
+            raise DataProcessingError(
+                f"Invalid input data in text generation: {str(e)}"
+            )
         except Exception as e:
             logger.error(f"Decoding failed: {str(e)}")
             raise ReverserError(f"Decoding failed: {str(e)}")
@@ -559,6 +585,7 @@ class Seq2SeqReverser:
                  with special tokens removed.
 
         Raises:
+            DataProcessingError: If input data is invalid or malformed.
             ReverserError: If beam search fails due to model error.
         """
         try:
@@ -612,6 +639,9 @@ class Seq2SeqReverser:
             )
             logger.debug(f"Generated text with log probability: {best_log_prob:.4f}")
             return generated_text
+        except ValueError as e:
+            logger.error(f"Invalid input data in beam search: {str(e)}")
+            raise DataProcessingError(f"Invalid input data in beam search: {str(e)}")
         except Exception as e:
             logger.error(f"Beam search failed: {str(e)}")
             raise ReverserError(f"Beam search failed: {str(e)}")
@@ -638,9 +668,13 @@ class Seq2SeqReverser:
             int: Sampled token ID.
 
         Raises:
-            ReverserError: If sampling fails due to invalid logits or parameters.
+            DataProcessingError: If logits are invalid or parameters are out of range.
+            ReverserError: If sampling fails due to model error.
         """
         try:
+            if top_p <= 0 or top_p > 1:
+                raise ValueError(f"top_p must be in (0, 1], got {top_p}")
+
             logits = torch.nan_to_num(logits, nan=0.0, posinf=1e4, neginf=-1e4)
 
             probs = F.softmax(logits, dim=-1)
@@ -677,6 +711,9 @@ class Seq2SeqReverser:
 
             next_token_id = torch.multinomial(probs, 1).item()
             return next_token_id
+        except ValueError as e:
+            logger.error(f"Invalid parameters in sampling: {str(e)}")
+            raise DataProcessingError(f"Invalid parameters in sampling: {str(e)}")
         except Exception as e:
             logger.error(f"Failed to sample from logits: {str(e)}")
             raise ReverserError(f"Failed to sample from logits: {str(e)}")
