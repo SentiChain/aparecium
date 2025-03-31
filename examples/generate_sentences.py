@@ -64,8 +64,12 @@ def generate_sentences(
 
     for batch_idx in range(num_batches):
         current_batch_size = min(batch_size, num_sentences - len(sentences))
+        batch_sentences = []
+        batch_attempts = 0
 
-        for attempt in range(max_retries):
+        while (
+            len(batch_sentences) < current_batch_size and batch_attempts < max_retries
+        ):
             try:
                 completion = openai.chat.completions.create(
                     model=openai_model,
@@ -85,7 +89,7 @@ def generate_sentences(
                         {
                             "role": "user",
                             "content": (
-                                f"Please generate {current_batch_size} unique, informative updates. "
+                                f"Please generate exactly {current_batch_size} unique, informative updates. "
                                 "Each update should be on its own line, remain between 5 and 40 words, "
                                 "and cover different topics or angles in the crypto sphere. "
                                 "Ensure that some updates include relevant crypto symbols."
@@ -98,29 +102,50 @@ def generate_sentences(
                 response = completion.choices[0].message.content.strip()  # type: ignore
 
                 # Extract and clean sentences
-                batch_sentences = [
+                new_sentences = [
                     line.strip()
                     for line in response.split("\n")
                     if line.strip()
                     and not line.strip().startswith(("1.", "2.", "3.", "4.", "5."))
                 ]
 
-                sentences.extend(batch_sentences[:current_batch_size])
-                logger.info(
-                    f"Generated batch {batch_idx + 1}/{num_batches} with {len(batch_sentences[:current_batch_size])} sentences"
-                )
-                break
+                # Only add sentences if not exceeded the batch size
+                remaining_slots = current_batch_size - len(batch_sentences)
+                batch_sentences.extend(new_sentences[:remaining_slots])
+
+                if len(batch_sentences) < current_batch_size:
+                    batch_attempts += 1
+                    if batch_attempts < max_retries:
+                        logger.warning(
+                            f"Batch {batch_idx + 1} only got {len(batch_sentences)}/{current_batch_size} sentences. "
+                            f"Retrying... (Attempt {batch_attempts + 1}/{max_retries})"
+                        )
+                        time.sleep(retry_delay)
+                    else:
+                        logger.error(
+                            f"Failed to generate {current_batch_size} sentences after {max_retries} attempts. "
+                            f"Got {len(batch_sentences)} sentences instead."
+                        )
+                        raise Exception(
+                            f"Failed to generate required number of sentences for batch {batch_idx + 1}"
+                        )
 
             except Exception as e:
-                if attempt == max_retries - 1:
+                batch_attempts += 1
+                if batch_attempts == max_retries:
                     logger.error(
                         f"Failed to generate sentences after {max_retries} attempts: {str(e)}"
                     )
                     raise
                 logger.warning(
-                    f"Attempt {attempt + 1} failed, retrying in {retry_delay} seconds..."
+                    f"Attempt {batch_attempts} failed, retrying in {retry_delay} seconds..."
                 )
                 time.sleep(retry_delay)
+
+        sentences.extend(batch_sentences)
+        logger.info(
+            f"Generated batch {batch_idx + 1}/{num_batches} with {len(batch_sentences)} sentences"
+        )
 
     return sentences
 
