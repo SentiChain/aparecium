@@ -107,6 +107,17 @@ recovered_text = reverser.generate_text(source_rep)
 print(recovered_text)
 ```
 
+## Examples
+
+The `examples/` directory contains several comprehensive examples:
+
+- `train_pipeline.py`: Complete training pipeline for the text reconstruction model
+- `train_reverser.py`: Script for training the embedding reverser model
+- `generate_sentences.py`: Example of generating text from embedding vectors
+- `config.py`: Configuration management for training and inference
+
+For detailed usage examples, please refer to the individual example files in the `examples/` directory.
+
 ## Project Structure
 
 ```

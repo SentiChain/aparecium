@@ -1,8 +1,8 @@
 """
-Aparecium Training and Demonstration Script
+Aparecium Training and Demonstration Module
 
-This script demonstrates how to use Aparecium's Vectorizer and Seq2SeqReverser classes
-in conjunction with a ApareciumDB instance. It covers:
+This module provides functions for training and testing Aparecium's Vectorizer and Seq2SeqReverser classes
+in conjunction with a ApareciumDB instance. It includes functions for:
 
 1. Retrieving or generating sample training data (sentences + embeddings) within a given
    block range.
@@ -12,14 +12,12 @@ in conjunction with a ApareciumDB instance. It covers:
 4. Periodically saving and loading the model checkpoints to/from disk.
 5. Storing all data (sentences & embeddings) in an SQLite database for persistence.
 
-Run this script directly (e.g. `python your_script.py`) to see how the
-workflow operates in practice.
+These functions are meant to be used by the main training pipeline (train_pipeline.py)
+rather than being executed directly.
 """
 
 from typing import Tuple, List
-import os
 import random
-import torch  # type: ignore
 
 from aparecium import Vectorizer, Seq2SeqReverser  # type: ignore
 from aparecium.db_utils import ApareciumDB  # type: ignore
@@ -173,131 +171,3 @@ def test_sample(vectorizer: Vectorizer, reverser: Seq2SeqReverser) -> None:
         print(f"BeamSearch: {generated_beam}")
         print(f"Sampling:   {generated_sample}")
         print("---")
-
-
-def main():
-    """
-    Main function demonstrating an end-to-end usage of the Aparecium package.
-
-    Steps performed:
-    1. Define parameters and block ranges.
-    2. Initialize the SQLite database, vectorizer, and seq2seq reverser.
-    3. Attempt to load an existing trained model from disk; otherwise train from scratch.
-    4. For a specified number of epochs:
-       a) Loop through the block ranges in increments (block_size).
-       b) Retrieve or generate training data via `prepare_train_data`.
-       c) Train the seq2seq reverser in batched mode on these samples.
-       d) Periodically test the model's performance with `test_sample`.
-       e) Save model checkpoints after processing each block.
-    5. Print an average epoch loss, then close the database connection.
-
-    Note:
-        This script is for demonstration. For a production scenario, you may want
-        to adjust hyperparameters (e.g., EPOCHS, BATCH_SIZE) and handle your own
-        dataset rather than the generated samples.
-
-    Returns:
-        None
-    """
-    # 1) Parameters
-    block_start = 1
-    block_end = 100
-    block_size = 50
-
-    # 2) Initialize device, database, vectorizer, and reverser
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-
-    db = ApareciumDB(db_path="data/example.db")
-    print("Initialized database at data/example.db")
-
-    vectorizer = Vectorizer(
-        model_name="sentence-transformers/all-mpnet-base-v2",
-        device=device,
-    )
-
-    reverser = Seq2SeqReverser(
-        model_name="sentence-transformers/all-mpnet-base-v2",
-        d_model=768,
-        num_decoder_layers=2,
-        nhead=8,
-        dim_feedforward=2048,
-        lr=1e-4,
-        device=device,
-    )
-
-    # 3) Attempt to load pre-trained model checkpoint, if available
-    model_path = "models/seq2seqreverser/example"
-    try:
-        reverser.load_model(model_path, device)
-        print(f"Model loaded from {model_path}")
-    except Exception as e:
-        print(f"Could not load model from {model_path}: {e}")
-        print("Will train from scratch")
-
-    # 4) Training loop (demonstration)
-    EPOCHS = 5
-    BATCH_SIZE = 8
-
-    for epoch in range(EPOCHS):
-        total_loss = 0.0
-        total_samples = 0
-
-        # Process data in sub-ranges
-        for start in range(block_start, block_end, block_size):
-            current_end = min(start + block_size - 1, block_end)
-            print(f"Processing blocks {start}-{current_end}")
-
-            # 4A) Retrieve or generate training data
-            train_sentences, train_matrices = prepare_train_data(
-                start, current_end, vectorizer, db
-            )
-            block_num_samples = len(train_sentences)
-
-            if block_num_samples == 0:
-                print(f"No samples found for blocks {start}-{current_end}, skipping")
-                continue
-
-            # 4B) Train in mini-batches
-            for i in range(0, block_num_samples, BATCH_SIZE):
-                batch_sents = train_sentences[i : i + BATCH_SIZE]
-                batch_mats = train_matrices[i : i + BATCH_SIZE]
-
-                # One batched training step
-                loss = reverser.train_step_batch(
-                    source_rep_batch=batch_mats,
-                    target_text_batch=batch_sents,
-                    max_source_length=256,
-                    max_target_length=256,
-                )
-                # Accumulate total loss
-                effective_batch_size = len(batch_sents)
-                total_loss += loss * effective_batch_size
-                total_samples += effective_batch_size
-
-                # Print progress
-                if i % (BATCH_SIZE * 10) == 0 or i + BATCH_SIZE >= block_num_samples:
-                    print(
-                        f"Epoch {epoch+1}/{EPOCHS}, Block {start}-{current_end}, "
-                        f"Batch {i//BATCH_SIZE + 1}/{(block_num_samples + BATCH_SIZE - 1)//BATCH_SIZE}, "
-                        f"Loss: {loss:.4f}"
-                    )
-
-            # Test model on a small set of sample sentences
-            test_sample(vectorizer, reverser)
-
-            # Save a checkpoint after each block range
-            os.makedirs(os.path.dirname(model_path), exist_ok=True)
-            reverser.save_model(model_path)
-            print(f"Model saved to {model_path}")
-
-        # Compute average loss for this epoch
-        avg_loss = (total_loss / total_samples) if total_samples > 0 else 0.0
-        print(f"Epoch {epoch+1}/{EPOCHS}, Avg Loss: {avg_loss:.4f}")
-
-    # Close the database connection
-    db.close()
-
-
-if __name__ == "__main__":
-    main()
