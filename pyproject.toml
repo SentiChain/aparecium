@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aparecium"
-version = "0.2.2"
+version = "0.2.3"
 description = "Aparecium is a Python package for revealing text from embedding vectors, particularly designed to work with SentiChain embeddings."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     "torch==2.5.1",
     "transformers==4.47.1",
-    "sentichain==0.2.0",
+    "sentichain>=0.2.2",
     "numpy==1.26.4",
     "openai==1.58.1",
 ]

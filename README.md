@@ -174,7 +174,7 @@ aparecium/
 - Python ≥ 3.7
 - PyTorch 2.5.1
 - Transformers 4.47.1
-- SentiChain 0.2.0
+- SentiChain ≥ 0.2.2
 - NumPy 1.26.4
 
 ## Contributing
