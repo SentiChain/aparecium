@@ -1,3 +1,55 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test/coverage caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.cache/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project-specific (do not publish local data, logs, checkpoints)
+logs/
+models/
+data/pipeline/
+data/**/*.db
+data/**/*.npz
+data/**/*.npy
+data/**/*.pt
+data/**/*.pth
+data/crypto_posts_500k.txt
+pipeline/results_*.txt
+
+# Common ML checkpoints (keep code-only repo clean)
+*.pt
+*.ckpt
+*.bin
+*.safetensors
+
 # Ignore python cache dirs
 
 # Python temp files

@@ -25,7 +25,7 @@ Example:
     "Hello world"
 """
 
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict
 import os
 from pathlib import Path
 import torch  # type: ignore
@@ -40,6 +40,13 @@ from .exceptions import (  # type: ignore
     ReverserError,
     ConfigurationError,
     DataProcessingError,
+)
+from .decoding import (
+    apply_length_penalty,
+    MPNetEmbeddingScorer,
+    cosine_sim,
+    compute_logit_biases,
+    pool_source_memory,
 )
 
 
@@ -86,6 +93,7 @@ class TransformerSeq2SeqModel(nn.Module):
         num_decoder_layers: int = 2,
         nhead: int = 8,
         dim_feedforward: int = 2048,
+        max_position_embeddings: int = 512,
     ):
         """
         Initialize the TransformerSeq2SeqModel.
@@ -99,7 +107,8 @@ class TransformerSeq2SeqModel(nn.Module):
         """
         super().__init__()
         self.token_embedding = nn.Embedding(vocab_size, d_model)
-        self.pos_embedding = nn.Embedding(512, d_model)
+        # Make position embedding length-safe and configurable
+        self.pos_embedding = nn.Embedding(max_position_embeddings, d_model)
 
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
@@ -118,6 +127,8 @@ class TransformerSeq2SeqModel(nn.Module):
         encoder_outputs: torch.Tensor,
         tgt_input_ids: torch.Tensor,
         tgt_mask: torch.Tensor,
+        tgt_key_padding_mask: Optional[torch.Tensor] = None,
+        memory_key_padding_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Forward pass of the Transformer decoder model.
@@ -139,6 +150,13 @@ class TransformerSeq2SeqModel(nn.Module):
         """
         tgt_seq_len, batch_size = tgt_input_ids.size()
 
+        # Guard: target length must not exceed max positional embeddings
+        if tgt_seq_len > self.pos_embedding.num_embeddings:
+            raise ValueError(
+                f"Target sequence length {tgt_seq_len} exceeds max positional embeddings "
+                f"{self.pos_embedding.num_embeddings}. Increase max_position_embeddings."
+            )
+
         token_emb = self.token_embedding(tgt_input_ids)
         positions = torch.arange(tgt_seq_len, device=tgt_input_ids.device).unsqueeze(1)
         pos_emb = self.pos_embedding(positions).squeeze(1)
@@ -148,6 +166,8 @@ class TransformerSeq2SeqModel(nn.Module):
             tgt=token_emb,
             memory=encoder_outputs,
             tgt_mask=tgt_mask,
+            tgt_key_padding_mask=tgt_key_padding_mask,
+            memory_key_padding_mask=memory_key_padding_mask,
         )
         logits = self.fc_out(hidden_states)
         return logits
@@ -276,6 +296,7 @@ class Seq2SeqReverser:
                 num_decoder_layers=num_decoder_layers,
                 nhead=nhead,
                 dim_feedforward=dim_feedforward,
+                max_position_embeddings=512,
             ).to(self.device)
 
             self.criterion = nn.CrossEntropyLoss(
@@ -290,6 +311,8 @@ class Seq2SeqReverser:
                 "nhead": nhead,
                 "dim_feedforward": dim_feedforward,
                 "lr": lr,
+                "max_source_length": 384,
+                "max_target_length": 128,
             }
             logger.info("Seq2SeqReverser initialized successfully")
         except OSError as e:
@@ -329,7 +352,10 @@ class Seq2SeqReverser:
             encoder_outputs = torch.tensor(source_rep, device=self.device).unsqueeze(1)
 
             target_tokens = self.tokenizer.encode(
-                target_text, return_tensors="pt", truncation=True, max_length=256
+                target_text,
+                return_tensors="pt",
+                truncation=True,
+                max_length=self.config.get("max_target_length", 256),
             ).to(self.device)
             target_tokens = target_tokens.squeeze(0)
             if target_tokens.size(0) < 2:
@@ -342,7 +368,16 @@ class Seq2SeqReverser:
             seq_len = dec_input.size(0)
             tgt_mask = generate_subsequent_mask(seq_len, self.device)
 
-            logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
+            mem_kpm = torch.zeros(
+                (1, encoder_outputs.size(0)), dtype=torch.bool, device=self.device
+            )
+            logits = self.decoder(
+                encoder_outputs,
+                dec_input,
+                tgt_mask,
+                tgt_key_padding_mask=None,
+                memory_key_padding_mask=mem_kpm,
+            )
             vocab_size = logits.size(-1)
             logits_flat = logits.view(-1, vocab_size)
             dec_target_flat = dec_target.view(-1)
@@ -365,8 +400,8 @@ class Seq2SeqReverser:
         self,
         source_rep_batch: List[List[List[float]]],
         target_text_batch: List[str],
-        max_source_length: int = 256,
-        max_target_length: int = 256,
+        max_source_length: Optional[int] = None,
+        max_target_length: Optional[int] = None,
     ) -> float:
         """
         Perform a batched teacher-forcing training step.
@@ -398,10 +433,16 @@ class Seq2SeqReverser:
             logger.debug(f"Processing batch of size {batch_size}")
 
             src_tensors = []
+            true_lengths: List[int] = []
+            if max_source_length is None:
+                max_source_length = int(self.config.get("max_source_length", 384))
+            if max_target_length is None:
+                max_target_length = int(self.config.get("max_target_length", 128))
             for rep in source_rep_batch:
                 rep = rep[:max_source_length]
                 t = torch.tensor(rep, dtype=torch.float32, device=self.device)
                 src_tensors.append(t)
+                true_lengths.append(t.size(0))
 
             encoder_outputs = torch.nn.utils.rnn.pad_sequence(
                 src_tensors, batch_first=False
@@ -415,6 +456,10 @@ class Seq2SeqReverser:
                 return_tensors="pt",
             )
             target_tokens = encoded_targets["input_ids"].to(self.device)
+            target_attention = encoded_targets.get("attention_mask", None)
+            tgt_key_padding_mask = None
+            if target_attention is not None:
+                tgt_key_padding_mask = (target_attention[:, :-1] == 0).to(self.device)
 
             if target_tokens.size(1) < 2:
                 logger.warning("All target texts too short, returning 0.0 loss")
@@ -429,7 +474,21 @@ class Seq2SeqReverser:
             seq_len = dec_input.size(0)
             tgt_mask = generate_subsequent_mask(seq_len, self.device)
 
-            logits = self.decoder(encoder_outputs, dec_input, tgt_mask)
+            # Build memory key padding mask: (B, max_src_len)
+            max_src_len = encoder_outputs.size(0)
+            mem_kpm = torch.ones(
+                (batch_size, max_src_len), dtype=torch.bool, device=self.device
+            )
+            for b, L in enumerate(true_lengths):
+                mem_kpm[b, :L] = False
+
+            logits = self.decoder(
+                encoder_outputs,
+                dec_input,
+                tgt_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=mem_kpm,
+            )
             vocab_size = logits.size(-1)
 
             loss = self.criterion(
@@ -455,13 +514,21 @@ class Seq2SeqReverser:
     def generate_text(
         self,
         source_rep: List[List[float]],
-        max_length: int = 40,
+        max_length: int = 64,
         num_beams: int = 1,
         do_sample: bool = False,
         top_k: int = 50,
         top_p: float = 0.9,
         temperature: float = 1.0,
-    ) -> str:
+        deterministic: bool = False,
+        length_penalty_alpha: float = 0.0,
+        lambda_sim: float = 0.0,
+        rescore_every_k: int = 4,
+        rescore_top_m: int = 8,
+        beta: float = 10.0,
+        enable_constraints: bool = False,
+        return_confidence: bool = False,
+    ) -> str | Tuple[str, Dict[str, float]]:
         """
         Generate text from source embeddings using beam search, greedy decoding, or sampling.
 
@@ -488,7 +555,24 @@ class Seq2SeqReverser:
             DataProcessingError: If input data is invalid or malformed.
             ReverserError: If text generation fails due to model error.
         """
+        _restore_det = False
+        _prev_det = False
         try:
+            # Deterministic gate
+            if deterministic:
+                import random
+
+                random.seed(0)
+                torch.manual_seed(0)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(0)
+                try:
+                    _prev_det = torch.are_deterministic_algorithms_enabled()
+                    torch.use_deterministic_algorithms(True)
+                    _restore_det = True
+                except Exception:
+                    pass
+
             self.decoder.eval()
             if not source_rep:
                 logger.warning(
@@ -505,23 +589,51 @@ class Seq2SeqReverser:
             # Beam search with num_beams > 1
             if num_beams > 1:
                 logger.debug("Using beam search for text generation")
-                return self._beam_search(
+                result = self._beam_search(
                     encoder_outputs,
                     max_length=max_length,
                     num_beams=num_beams,
                     temperature=temperature,
+                    length_penalty_alpha=length_penalty_alpha,
+                    lambda_sim=lambda_sim,
+                    rescore_every_k=rescore_every_k,
+                    rescore_top_m=rescore_top_m,
+                    beta=beta,
+                    enable_constraints=enable_constraints,
+                    cos_threshold=0.97,
                 )
+                if isinstance(result, tuple):
+                    text, info = result
+                else:
+                    text = result  # type: ignore
+                    info = {
+                        "cosine": 0.0,
+                        "score_norm": 0.0,
+                        "fused_score": 0.0,
+                        "used_refinement_steps": 0,
+                    }
+                if return_confidence:
+                    return text, info
+                return text
             else:
                 # Greedy or sampling decode
                 logger.debug("Using greedy/sampling decode for text generation")
-                return self._sample_or_greedy_decode(
+                text, info = self._sample_or_greedy_decode(
                     encoder_outputs,
                     max_length=max_length,
                     do_sample=do_sample,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
+                    enable_constraints=enable_constraints,
+                    length_penalty_alpha=length_penalty_alpha,
+                    lambda_sim=lambda_sim,
+                    rescore_every_k=rescore_every_k,
+                    beta=beta,
                 )
+                if return_confidence:
+                    return text, info
+                return text
         except ValueError as e:
             logger.error(f"Invalid input data in text generation: {str(e)}")
             raise DataProcessingError(
@@ -530,6 +642,12 @@ class Seq2SeqReverser:
         except Exception as e:
             logger.error(f"Text generation failed: {str(e)}")
             raise ReverserError(f"Text generation failed: {str(e)}")
+        finally:
+            if _restore_det:
+                try:
+                    torch.use_deterministic_algorithms(_prev_det)
+                except Exception:
+                    pass
 
     def _sample_or_greedy_decode(
         self,
@@ -539,7 +657,13 @@ class Seq2SeqReverser:
         top_k: int,
         top_p: float,
         temperature: float,
-    ) -> str:
+        enable_constraints: bool,
+        length_penalty_alpha: float = 0.0,
+        lambda_sim: float = 0.0,
+        rescore_every_k: int = 4,
+        beta: float = 10.0,
+        cos_threshold: float = 0.97,
+    ) -> Tuple[str, Dict[str, float]]:
         """
         Perform autoregressive text generation using either greedy decoding or sampling.
 
@@ -577,15 +701,44 @@ class Seq2SeqReverser:
                 [start_token_id], device=self.device
             ).unsqueeze(1)
             generated_tokens = []
+            cum_logprob: float = 0.0
+
+            # Prepare target embedding vector from source memory (mask-aware)
+            src_len = encoder_outputs.size(0)
+            mem_kpm = torch.zeros((1, src_len), dtype=torch.bool, device=self.device)
+            target_vec = pool_source_memory(encoder_outputs, mem_kpm)  # (1, d)
+
+            scorer: Optional[MPNetEmbeddingScorer] = None
+            best_cos: float = 0.0
+            best_fused: float = float("-inf")
 
             for step in range(max_length):
                 seq_len = current_input.size(0)
                 tgt_mask = generate_subsequent_mask(seq_len, self.device)
-                logits = self.decoder(encoder_outputs, current_input, tgt_mask)
+                mem_kpm = torch.zeros(
+                    (1, encoder_outputs.size(0)), dtype=torch.bool, device=self.device
+                )
+                logits = self.decoder(
+                    encoder_outputs,
+                    current_input,
+                    tgt_mask,
+                    tgt_key_padding_mask=None,
+                    memory_key_padding_mask=mem_kpm,
+                )
                 logits_step = logits[-1, 0, :]  # Shape: (vocab_size,)
 
                 # Apply temperature
                 logits_step = logits_step / max(temperature, 1e-8)
+
+                # Apply lightweight constraints via additive logit biases
+                if enable_constraints and len(generated_tokens) > 0:
+                    prev_id = generated_tokens[-1]
+                    bias = compute_logit_biases(
+                        prev_id, logits_step.size(0), self.tokenizer
+                    )
+                    if bias.device != logits_step.device:
+                        bias = bias.to(logits_step.device)
+                    logits_step = logits_step + bias
 
                 if do_sample:
                     # Top-k or nucleus sampling
@@ -594,7 +747,9 @@ class Seq2SeqReverser:
                     )
                 else:
                     # Greedy decoding
-                    next_token_id = torch.argmax(logits_step, dim=-1).item()
+                    values = F.log_softmax(logits_step, dim=-1)
+                    next_token_id = torch.argmax(values, dim=-1).item()
+                    cum_logprob += float(values[next_token_id].item())
 
                 generated_tokens.append(next_token_id)
 
@@ -603,15 +758,64 @@ class Seq2SeqReverser:
                 ).unsqueeze(1)
                 current_input = torch.cat([current_input, next_token], dim=0)
 
+                if lambda_sim > 0:
+                    # Periodically rescore the single hypothesis
+                    if scorer is None:
+                        scorer_device = (
+                            torch.device("cpu")
+                            if (
+                                lambda_sim > 0
+                                and torch.cuda.is_available()
+                                and torch.are_deterministic_algorithms_enabled()
+                            )
+                            else self.device
+                        )
+                        scorer = MPNetEmbeddingScorer(
+                            self.config.get(
+                                "model_name", "sentence-transformers/all-mpnet-base-v2"
+                            ),
+                            device=scorer_device,
+                        )
+                    if step % max(1, rescore_every_k) == 0:
+                        current_text = self.tokenizer.decode(
+                            generated_tokens, skip_special_tokens=True
+                        )
+                        emb = scorer.encode_and_pool([current_text])  # (1, D)
+                        tgt_vec = target_vec.to(emb.device)
+                        cos = float(cosine_sim(emb, tgt_vec)[:, 0].item())
+                        length = len(generated_tokens)
+                        score_norm = apply_length_penalty(
+                            cum_logprob, length, length_penalty_alpha
+                        )
+                        fused = (1.0 - lambda_sim) * score_norm + lambda_sim * (
+                            beta * cos
+                        )
+                        best_cos = cos
+                        best_fused = max(best_fused, fused)
+
                 if next_token_id == sep_token_id:
                     logger.debug(f"Decoding finished at step {step + 1}")
-                    break
+                    # Early exit if cosine high enough
+                    if lambda_sim > 0 and best_cos >= cos_threshold:
+                        break
+                    else:
+                        break
 
             generated_text = self.tokenizer.decode(
                 generated_tokens, skip_special_tokens=True
             )
             logger.debug(f"Generated text with {len(generated_tokens)} tokens")
-            return generated_text
+            info: Dict[str, float] = {
+                "cosine": float(best_cos) if lambda_sim > 0 else 0.0,
+                "score_norm": float(
+                    apply_length_penalty(
+                        cum_logprob, max(len(generated_tokens), 1), length_penalty_alpha
+                    )
+                ),
+                "fused_score": float(best_fused if lambda_sim > 0 else 0.0),
+                "used_refinement_steps": 0,
+            }
+            return generated_text, info
         except ValueError as e:
             logger.error(f"Invalid input data in text generation: {str(e)}")
             raise DataProcessingError(
@@ -627,7 +831,14 @@ class Seq2SeqReverser:
         max_length: int,
         num_beams: int,
         temperature: float,
-    ) -> str:
+        length_penalty_alpha: float,
+        lambda_sim: float,
+        rescore_every_k: int,
+        rescore_top_m: int,
+        beta: float,
+        enable_constraints: bool,
+        cos_threshold: float,
+    ) -> Tuple[str, Dict[str, float]]:
         """
         Implement beam search decoding for more optimal text generation.
 
@@ -656,23 +867,54 @@ class Seq2SeqReverser:
             logger.debug(f"Starting beam search with {num_beams} beams")
 
             beams = [
-                (
-                    torch.tensor([start_token_id], device=self.device).unsqueeze(1),
-                    0.0,
-                )
+                {
+                    "tokens": torch.tensor(
+                        [start_token_id], device=self.device
+                    ).unsqueeze(1),
+                    "logprob": 0.0,
+                    "score": 0.0,
+                    "cos": 0.0,
+                }
             ]
 
+            # Prepare target vector by mean pooling source memory (B=1)
+            src_len = encoder_outputs.size(0)
+            mem_kpm = torch.zeros((1, src_len), dtype=torch.bool, device=self.device)
+            target_vec = pool_source_memory(encoder_outputs, mem_kpm)  # (1, D)
+            scorer: Optional[MPNetEmbeddingScorer] = None
+            rescoring_cache: Dict[str, torch.Tensor] = {}
+
             for step in range(max_length):
-                new_beams = []
-                for tokens, log_prob in beams:
+                new_beams: List[Dict[str, object]] = []
+                for beam in beams:
+                    tokens = beam["tokens"]  # type: ignore
+                    log_prob = float(beam["logprob"])  # type: ignore
+
                     if tokens[-1].item() == sep_token_id:
-                        new_beams.append((tokens, log_prob))
+                        # Keep finished beams as-is
+                        new_beams.append(beam)
                         continue
 
                     seq_len = tokens.size(0)
                     tgt_mask = generate_subsequent_mask(seq_len, self.device)
-                    logits = self.decoder(encoder_outputs, tokens, tgt_mask)
+                    logits = self.decoder(
+                        encoder_outputs,
+                        tokens,
+                        tgt_mask,
+                        tgt_key_padding_mask=None,
+                        memory_key_padding_mask=mem_kpm,
+                    )
                     logits_step = logits[-1, 0, :] / max(temperature, 1e-8)
+
+                    # Add constraints if enabled
+                    if enable_constraints and seq_len > 0:
+                        prev_id = tokens[-1].item()
+                        bias = compute_logit_biases(
+                            prev_id, logits_step.size(0), self.tokenizer
+                        )
+                        if bias.device != logits_step.device:
+                            bias = bias.to(logits_step.device)
+                        logits_step = logits_step + bias
 
                     probs = F.log_softmax(logits_step, dim=-1)
                     top_probs, top_ids = probs.topk(num_beams)
@@ -684,22 +926,131 @@ class Seq2SeqReverser:
                             [tokens, torch.tensor([[next_id]], device=self.device)],
                             dim=0,
                         )
-                        new_beams.append((new_tokens, log_prob + next_score))
+                        new_logprob = log_prob + next_score
+                        length = new_tokens.size(0) - 1  # exclude CLS
+                        score_norm = apply_length_penalty(
+                            new_logprob, length, length_penalty_alpha
+                        )
+                        new_beams.append(
+                            {
+                                "tokens": new_tokens,
+                                "logprob": new_logprob,
+                                "score": score_norm,
+                                "cos": 0.0,
+                            }
+                        )
 
-                new_beams.sort(key=lambda b: b[1], reverse=True)
+                # Optional embedding-aware rescoring every k steps
+                if lambda_sim > 0.0 and (step % max(1, rescore_every_k) == 0):
+                    # Ensure scorer exists
+                    if scorer is None:
+                        scorer_device = (
+                            torch.device("cpu")
+                            if (
+                                lambda_sim > 0
+                                and torch.cuda.is_available()
+                                and torch.are_deterministic_algorithms_enabled()
+                            )
+                            else self.device
+                        )
+                        scorer = MPNetEmbeddingScorer(
+                            self.config.get(
+                                "model_name", "sentence-transformers/all-mpnet-base-v2"
+                            ),
+                            device=scorer_device,
+                        )
+                    # Take top-M by current score
+                    new_beams.sort(key=lambda b: float(b["score"]), reverse=True)  # type: ignore
+                    topM = new_beams[: min(rescore_top_m, len(new_beams))]
+                    texts: List[str] = []
+                    idxs: List[int] = []
+                    for j, b in enumerate(topM):
+                        toks = b["tokens"].squeeze(1).tolist()  # type: ignore
+                        text = self.tokenizer.decode(toks, skip_special_tokens=True)
+                        texts.append(text)
+                        idxs.append(j)
+                    # Encode texts with cache
+                    emb_list: List[torch.Tensor] = []
+                    for t in texts:
+                        if t in rescoring_cache:
+                            emb_list.append(rescoring_cache[t])
+                        else:
+                            vec = scorer.encode_and_pool([t])[0:1, :]  # (1, D)
+                            rescoring_cache[t] = vec
+                            emb_list.append(vec)
+                    emb = torch.cat(emb_list, dim=0)  # (M, D)
+                    tgt_vec = target_vec.to(emb.device)
+                    cos = cosine_sim(emb, tgt_vec)[:, 0]  # (M,)
+                    # Fuse scores
+                    for j, idx in enumerate(idxs):
+                        b = topM[idx]
+                        score_norm = float(b["score"])  # type: ignore
+                        fused = (1.0 - lambda_sim) * score_norm + lambda_sim * (
+                            beta * float(cos[j].item())
+                        )
+                        b["score"] = fused
+                        b["cos"] = float(cos[j].item())
+
+                    # Early exit: ended with SEP and cosine above threshold
+                    try:
+                        for j, idx in enumerate(idxs):
+                            b = topM[idx]
+                            toks = b["tokens"]  # type: ignore
+                            if (
+                                toks[-1].item() == sep_token_id
+                                and float(cos[j].item()) >= cos_threshold
+                            ):
+                                best_tokens = toks
+                                best_log_prob = float(b.get("logprob", 0.0))  # type: ignore
+                                best_cos = float(cos[j].item())
+                                best_length = best_tokens.size(0) - 1
+                                best_score_norm = apply_length_penalty(
+                                    best_log_prob, best_length, length_penalty_alpha
+                                )
+                                generated_text = self.tokenizer.decode(
+                                    best_tokens.squeeze(1).tolist(),
+                                    skip_special_tokens=True,
+                                )
+                                info = {
+                                    "cosine": best_cos,
+                                    "score_norm": float(best_score_norm),
+                                    "fused_score": float(b.get("score", best_score_norm)),  # type: ignore
+                                    "used_refinement_steps": 0,
+                                }
+                                return generated_text, info
+                    except Exception:
+                        pass
+
+                # Keep only top beams
+                new_beams.sort(key=lambda b: float(b["score"]), reverse=True)  # type: ignore
                 beams = new_beams[:num_beams]
 
-                all_finished = all(b[0][-1].item() == sep_token_id for b in beams)
+                # Early stop if all finished
+                all_finished = all(b["tokens"][-1].item() == sep_token_id for b in beams)  # type: ignore
                 if all_finished:
                     logger.debug(f"Beam search finished at step {step + 1}")
                     break
 
-            best_tokens, best_log_prob = max(beams, key=lambda b: b[1])
+            # Select best by fused score
+            best = max(beams, key=lambda b: float(b["score"]))
+            best_tokens = best["tokens"]  # type: ignore
+            best_log_prob = float(best["logprob"])  # type: ignore
+            best_cos = float(best.get("cos", 0.0))  # type: ignore
+            best_length = best_tokens.size(0) - 1
+            best_score_norm = apply_length_penalty(
+                best_log_prob, best_length, length_penalty_alpha
+            )
             generated_text = self.tokenizer.decode(
                 best_tokens.squeeze(1).tolist(), skip_special_tokens=True
             )
             logger.debug(f"Generated text with log probability: {best_log_prob:.4f}")
-            return generated_text
+            info = {
+                "cosine": best_cos,
+                "score_norm": float(best_score_norm),
+                "fused_score": float(best.get("score", best_score_norm)),  # type: ignore
+                "used_refinement_steps": 0,
+            }
+            return generated_text, info
         except ValueError as e:
             logger.error(f"Invalid input data in beam search: {str(e)}")
             raise DataProcessingError(f"Invalid input data in beam search: {str(e)}")

@@ -99,7 +99,7 @@ from aparecium import Seq2SeqReverser
 # Load the pre-trained model from Hugging Face Hub
 reverser = Seq2SeqReverser.from_pretrained("SentiChain/aparecium-seq2seq-reverser")
 
-# Reconstruct text from embedding vectors
+# Reconstruct text from embedding vectors (expects token-level MPNet matrix)
 recovered_text = reverser.generate_text(embedding_vectors)
 print(recovered_text)
 ```
@@ -169,9 +169,29 @@ aparecium/
    pytest
    ```
 
+## Model Input Contract & Defaults
+
+- Input to `Seq2SeqReverser.generate_text(...)` must be a token-level MPNet matrix with shape `(src_len, d_model)` (not a pooled vector). Use `Vectorizer.encode(text, max_length=384)` to produce it.
+- Suggested defaults that “just work” for tweets:
+  - beams: `num_beams=5`
+  - length penalty: `length_penalty_alpha=0.6`
+  - embedding fusion: `lambda_sim=0.3`
+  - rescoring cadence/top-M: `rescore_every_k=4`, `rescore_top_m=8`
+  - cosine scale: `beta=10.0`
+  - target length: `max_length≈128`
+  - determinism: `deterministic=True`
+  - constraints: `enable_constraints=True`
+
+### Confidence semantics
+- If `return_confidence=True`, generation returns `(text, info)` where `info` includes:
+  - `cosine`: final cosine similarity to the MPNet target vector (higher is better)
+  - `score_norm`: length-penalized LM score
+  - `fused_score`: fused value of LM score and cosine, used for ranking
+  - `used_refinement_steps`: 0 by default (reserved for future optional refinement)
+
 ## Requirements
 
-- Python ≥ 3.7
+- Python ≥ 3.9
 - PyTorch 2.5.1
 - Transformers 4.47.1
 - SentiChain ≥ 0.2.2

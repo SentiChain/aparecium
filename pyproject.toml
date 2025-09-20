@@ -24,7 +24,7 @@ dependencies = [
     "numpy==1.26.4",
     "openai==1.58.1",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 
 [project.urls]
 "Homepage" = "https://github.com/SentiChain/aparecium"
@@ -32,4 +32,4 @@ requires-python = ">=3.7"
 "Tracker" = "https://github.com/SentiChain/aparecium/issues"
 
 [tool.setuptools]
-packages = ["aparecium"]
+packages = ["aparecium", "aparecium.decoding"]
