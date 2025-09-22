@@ -91,7 +91,7 @@ embedding_vectors = vectorizer.encode(text)
 # embedding_vectors shape: (sequence_length, embedding_dimension)
 ```
 
-### Vector to Text Reconstruction
+### Vector to Text Reconstruction (from Hugging Face Hub)
 
 ```python
 from aparecium import Seq2SeqReverser
@@ -99,9 +99,20 @@ from aparecium import Seq2SeqReverser
 # Load the pre-trained model from Hugging Face Hub
 reverser = Seq2SeqReverser.from_pretrained("SentiChain/aparecium-seq2seq-reverser")
 
-# Reconstruct text from embedding vectors
-recovered_text = reverser.generate_text(embedding_vectors)
-print(recovered_text)
+# Reconstruct text from embedding vectors (expects token-level MPNet matrix)
+text_or_text_info = reverser.generate_text(
+    embedding_vectors,  # shape: (seq_len, 768)
+    max_length=128,
+    num_beams=8,
+    deterministic=True,
+    length_penalty_alpha=0.6,
+    lambda_sim=0.6,
+    rescore_every_k=4,
+    rescore_top_m=8,
+    beta=10.0,
+    enable_constraints=True,
+)
+print(text_or_text_info)
 ```
 
 Note: The pre-trained model is specifically trained on crypto market-related sentences. For best results, use it with similar content.
@@ -122,23 +133,23 @@ recovered_text = reverser.generate_text(embedding_vectors)
 print(recovered_text)
 ```
 
-## Examples
+## Pipeline
 
-The `examples/` directory contains several comprehensive examples:
+The `pipeline/` directory contains end-to-end scripts and documentation for data preparation, training, and evaluation. See `pipeline/README.md` for details, including CLI flags and examples.
 
-- `train_pipeline.py`: Complete training pipeline for the text reconstruction model
-- `train_reverser.py`: Script for training the embedding reverser model
-- `generate_sentences.py`: Example of generating text from embedding vectors
-- `config.py`: Configuration management for training and inference
+Note: Pipeline scripts are repository-only and are not included in the PyPI package. If you installed via `pip install aparecium`, clone the repo to use the pipeline scripts.
 
-For detailed usage examples, please refer to the individual example files in the `examples/` directory.
+- `pipeline/prepare_db.py`: Cache token-level MPNet embeddings and texts into an SQLite database
+- `pipeline/train.py`: Train or resume the `Seq2SeqReverser` directly from cached embeddings
+- `pipeline/evaluate.py`: Evaluate model checkpoints
+- `pipeline/evaluate_prompts.py`: Evaluate prompts/decoding settings against cached data
 
 ## Project Structure
 
 ```
 aparecium/
 ├── aparecium/         # Main package directory
-├── examples/          # Example scripts
+├── pipeline/          # Training/evaluation pipeline & docs
 ├── tests/             # Unittest suite
 ├── data/              # Data directory
 ├── models/            # Model checkpoints and configurations
@@ -161,7 +172,8 @@ aparecium/
 
 3. Install development dependencies:
    ```bash
-   pip install -e ".[dev]"
+   pip install -e .
+   pip install pytest
    ```
 
 4. Run tests:
@@ -169,13 +181,39 @@ aparecium/
    pytest
    ```
 
+## Model Input Contract & Defaults
+
+- Input to `Seq2SeqReverser.generate_text(...)` must be a token-level MPNet matrix with shape `(src_len, d_model)` (not a pooled vector). Use `Vectorizer.encode(text, max_length=384)` to produce it.
+- Suggested defaults that “just work” for tweets:
+  - beams: `num_beams=5`
+  - length penalty: `length_penalty_alpha=0.6`
+  - embedding fusion: `lambda_sim=0.3`
+  - rescoring cadence/top-M: `rescore_every_k=4`, `rescore_top_m=8`
+  - cosine scale: `beta=10.0`
+  - target length: `max_length≈128`
+  - determinism: `deterministic=True`
+  - constraints: `enable_constraints=True`
+
+### Confidence semantics
+- If `return_confidence=True`, generation returns `(text, info)` where `info` includes:
+  - `cosine`: final cosine similarity to the MPNet target vector (higher is better)
+  - `score_norm`: length-penalized LM score
+  - `fused_score`: fused value of LM score and cosine, used for ranking
+  - `used_refinement_steps`: 0 by default (reserved for future optional refinement)
+
 ## Requirements
 
-- Python ≥ 3.7
+- Python ≥ 3.9
 - PyTorch 2.5.1
 - Transformers 4.47.1
 - SentiChain ≥ 0.2.2
 - NumPy 1.26.4
+- huggingface-hub ≥ 0.24.0
+
+Optional:
+- openai == 1.58.1 (only needed for certain evaluation utilities)
+
+Note: GPU (CUDA) is auto-detected when available; CPU works but will be slower for training and generation.
 
 ## Contributing
 

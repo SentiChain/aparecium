@@ -84,7 +84,7 @@ class Vectorizer:
                 f"Unexpected error during model initialization: {str(e)}"
             )
 
-    def encode(self, text: str, max_length: int = 256) -> List[List[float]]:
+    def encode(self, text: str, max_length: int = 384) -> List[List[float]]:
         """
         Tokenize and encode text into a matrix of token embeddings.
 
@@ -97,7 +97,7 @@ class Vectorizer:
             max_length (int, optional):
                 The maximum sequence length for tokenization.
                 Sequences longer than this will be truncated.
-                Defaults to 256.
+                Defaults to 384.
 
         Returns:
             List[List[float]]:

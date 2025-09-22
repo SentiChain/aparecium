@@ -75,7 +75,7 @@ class TestVectorizer(unittest.TestCase):
 
         # Verify tokenizer called with correct args
         mock_tokenizer.assert_called_once_with(
-            test_text, return_tensors="pt", truncation=True, max_length=256
+            test_text, return_tensors="pt", truncation=True, max_length=384
         )
 
         # Check result structure

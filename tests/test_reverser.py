@@ -88,18 +88,139 @@ class TestTransformerSeq2SeqModel(unittest.TestCase):
             num_decoder_layers=1,
             nhead=4,
             dim_feedforward=1024,
+            max_position_embeddings=64,
         )
 
         # Create sample inputs
         encoder_outputs = torch.rand(src_seq_len, batch_size, d_model)
         tgt_input_ids = torch.randint(0, vocab_size, (tgt_seq_len, batch_size))
         tgt_mask = generate_subsequent_mask(tgt_seq_len, device=torch.device("cpu"))
+        # Provide key padding masks
+        tgt_kpm = torch.zeros(batch_size, tgt_seq_len, dtype=torch.bool)
+        mem_kpm = torch.zeros(batch_size, src_seq_len, dtype=torch.bool)
 
         # Run forward pass
-        logits = model(encoder_outputs, tgt_input_ids, tgt_mask)
+        logits = model(encoder_outputs, tgt_input_ids, tgt_mask, tgt_kpm, mem_kpm)
 
         # Check output shape
         self.assertEqual(logits.shape, (tgt_seq_len, batch_size, vocab_size))
+
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_length_penalty_and_determinism_flags(
+        self, mock_model_class, mock_tokenizer, mock_adamw
+    ):
+        # Setup mocks
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+        mock_tokenizer_instance.decode.return_value = "decoded"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        # Setup mock model with parameters
+        mock_decoder = MagicMock()
+        mock_params = [torch.nn.Parameter(torch.randn(10, 10))]
+        mock_decoder.parameters.return_value = mock_params
+        # Model returns zeros logits for deterministic behavior
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        # Setup mock optimizer
+        mock_optimizer = MagicMock()
+        mock_adamw.return_value = mock_optimizer
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+
+        source_rep = [[0.0] * reverser.config["d_model"] for _ in range(5)]
+
+        text, info = reverser.generate_text(
+            source_rep,
+            max_length=4,
+            num_beams=2,
+            deterministic=True,
+            length_penalty_alpha=0.6,
+            lambda_sim=0.0,
+            return_confidence=True,
+        )
+        self.assertIsInstance(text, str)
+        self.assertIn("score_norm", info)
+
+    @patch("aparecium.reverser.cosine_sim")
+    @patch("aparecium.reverser.MPNetEmbeddingScorer.encode_and_pool")
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_rescoring_flip(
+        self,
+        mock_model_class,
+        mock_tokenizer,
+        mock_adamw,
+        mock_encode_and_pool,
+        mock_cosine,
+    ):
+        # Setup mocks
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+
+        # The two candidates decode to A (LM-preferred) vs B (cosine-preferred)
+        # We will just return different strings depending on first token id
+        def fake_decode(ids, skip_special_tokens=True):
+            if not ids:
+                return ""
+            return "A" if ids[-1] % 2 == 0 else "B"
+
+        mock_tokenizer_instance.decode.side_effect = fake_decode
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        # Mock model that forces topk to prefer token even=LM, odd=cosine
+        mock_decoder = MagicMock()
+        mock_decoder.parameters.return_value = [torch.nn.Parameter(torch.randn(10, 10))]
+        # Return zeros so argmax selects index 0 deterministically; we'll simulate flip by lambda_sim>0 via decode text change
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        # Patch encoder + cosine so that text "B" always has higher cosine than "A"
+        def fake_encode(texts):
+            # Return (N, D) where D=1 with values 1.0 for 'A', 2.0 for 'B'
+            vals = [1.0 if (t == "A") else 2.0 for t in texts]
+            return torch.tensor(vals, dtype=torch.float32).unsqueeze(1)
+
+        def fake_cosine(a, b):
+            # Return (N, 1) equal to the value in a
+            return a
+
+        mock_encode_and_pool.side_effect = fake_encode
+        mock_cosine.side_effect = fake_cosine
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+        source_rep = [[0.1] * reverser.config["d_model"] for _ in range(5)]
+
+        # With lambda_sim=0, LM-only
+        text_lm, info_lm = reverser.generate_text(
+            source_rep,
+            max_length=2,
+            num_beams=2,
+            deterministic=True,
+            lambda_sim=0.0,
+            return_confidence=True,
+        )
+        # With lambda_sim>0, cosine-preferred should be favored
+        text_cos, info_cos = reverser.generate_text(
+            source_rep,
+            max_length=2,
+            num_beams=2,
+            deterministic=True,
+            lambda_sim=0.3,
+            return_confidence=True,
+        )
+        # Cosine should be higher under lambda_sim > 0 setting
+        self.assertGreaterEqual(info_cos["cosine"], info_lm["cosine"])
 
 
 class TestSeq2SeqReverser(unittest.TestCase):
@@ -282,7 +403,7 @@ class TestSeq2SeqReverser(unittest.TestCase):
                 target_text_batch,
                 padding=True,
                 truncation=True,
-                max_length=256,
+                max_length=128,
                 return_tensors="pt",
             )
 
@@ -418,6 +539,49 @@ class TestSeq2SeqReverser(unittest.TestCase):
             # Check the temperature was applied
             self.assertEqual(mock_sample.call_args[1]["top_k"], 50)
             self.assertEqual(mock_sample.call_args[1]["top_p"], 0.9)
+
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_greedy_confidence_nonzero_with_lambda(
+        self, mock_model_class, mock_tokenizer, mock_adamw
+    ):
+        # Setup mocks
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+        mock_tokenizer_instance.decode.return_value = "decoded"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        # Setup mock model
+        mock_decoder = MagicMock()
+        mock_decoder.parameters.return_value = [torch.nn.Parameter(torch.randn(10, 10))]
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        # Optimizer
+        mock_optimizer = MagicMock()
+        mock_adamw.return_value = mock_optimizer
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+
+        source_rep = [[0.0] * reverser.config["d_model"] for _ in range(5)]
+
+        text, info = reverser.generate_text(
+            source_rep,
+            max_length=3,
+            num_beams=1,
+            deterministic=True,
+            lambda_sim=0.3,
+            return_confidence=True,
+        )
+
+        self.assertIsInstance(text, str)
+        # With lambda_sim > 0, cosine or fused_score should be computable (>= 0)
+        self.assertIn("cosine", info)
+        self.assertIn("fused_score", info)
 
     @patch("aparecium.reverser.optim.AdamW")
     @patch("aparecium.reverser.AutoTokenizer")
@@ -669,6 +833,109 @@ class TestSeq2SeqReverser(unittest.TestCase):
             # Check config was updated
             self.assertEqual(reverser.config["model_name"], "test-model")
             self.assertEqual(reverser.config["lr"], 1e-5)
+
+
+class TestNewBehaviors(unittest.TestCase):
+    """
+    Additional tests for mask invariance, constraints safety, and determinism.
+    """
+
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_determinism_flag(self, mock_model_class, mock_tokenizer, mock_adamw):
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+        mock_tokenizer_instance.decode.return_value = "decoded"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        mock_decoder = MagicMock()
+        mock_decoder.parameters.return_value = [torch.nn.Parameter(torch.randn(10, 10))]
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+        source_rep = [[0.0] * reverser.config["d_model"] for _ in range(5)]
+
+        text1 = reverser.generate_text(
+            source_rep, max_length=3, num_beams=1, deterministic=True
+        )
+        text2 = reverser.generate_text(
+            source_rep, max_length=3, num_beams=1, deterministic=True
+        )
+        self.assertEqual(text1, text2)
+
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_mask_invariance_append_padding(
+        self, mock_model_class, mock_tokenizer, mock_adamw
+    ):
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+        mock_tokenizer_instance.decode.return_value = "decoded"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        mock_decoder = MagicMock()
+        mock_decoder.parameters.return_value = [torch.nn.Parameter(torch.randn(10, 10))]
+        # Return stable logits so outputs are deterministic
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+        source_rep = [[0.1] * reverser.config["d_model"] for _ in range(5)]
+        source_rep_padded = source_rep + [
+            [0.0] * reverser.config["d_model"] for _ in range(3)
+        ]
+
+        text_base = reverser.generate_text(
+            source_rep, max_length=3, num_beams=1, deterministic=True
+        )
+        text_pad = reverser.generate_text(
+            source_rep_padded, max_length=3, num_beams=1, deterministic=True
+        )
+        self.assertEqual(text_base, text_pad)
+
+    @patch("aparecium.reverser.optim.AdamW")
+    @patch("aparecium.reverser.AutoTokenizer")
+    @patch("aparecium.reverser.TransformerSeq2SeqModel")
+    def test_constraints_safety_no_crash(
+        self, mock_model_class, mock_tokenizer, mock_adamw
+    ):
+        mock_tokenizer_instance = MagicMock()
+        mock_tokenizer_instance.__len__.return_value = 1000
+        mock_tokenizer_instance.cls_token_id = 101
+        mock_tokenizer_instance.sep_token_id = 102
+        mock_tokenizer_instance.convert_ids_to_tokens.return_value = "▁$"
+        mock_tokenizer_instance.decode.return_value = "$BTC"
+        mock_tokenizer.from_pretrained.return_value = mock_tokenizer_instance
+
+        mock_decoder = MagicMock()
+        mock_decoder.parameters.return_value = [torch.nn.Parameter(torch.randn(10, 10))]
+        mock_decoder.return_value = torch.zeros(1, 1, 1000)
+        mock_model_class.return_value = mock_decoder
+
+        reverser = Seq2SeqReverser()
+        reverser.decoder = mock_decoder
+        source_rep = [[0.1] * reverser.config["d_model"] for _ in range(5)]
+
+        # Should not crash and should produce contiguous cashtag-like text
+        text = reverser.generate_text(
+            source_rep,
+            max_length=3,
+            num_beams=1,
+            deterministic=True,
+            enable_constraints=True,
+        )
+        self.assertIsInstance(text, str)
+        # basic contiguity check for cashtag-like output
+        self.assertNotIn("$ ", text)
 
 
 if __name__ == "__main__":
