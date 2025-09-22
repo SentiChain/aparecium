@@ -43,6 +43,8 @@ data/**/*.pt
 data/**/*.pth
 data/crypto_posts_500k.txt
 pipeline/results_*.txt
+local_scripts/
+hf_aparecium/
 
 # Common ML checkpoints (keep code-only repo clean)
 *.pt
