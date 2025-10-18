@@ -1,84 +1,76 @@
-# Python bytecode and caches
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Python bytecode/cache
 __pycache__/
 *.py[cod]
 *$py.class
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
 
-# Virtual environments
+# Environments
 .venv/
 venv/
 env/
-ENV/
+.env
+.env.*
+.python-version
 
-# Build artifacts
+# Build/dist
 build/
 dist/
 *.egg-info/
-.eggs/
-pip-wheel-metadata/
-
-# Test/coverage caches
-.pytest_cache/
-.coverage
-.coverage.*
-htmlcov/
-coverage.xml
-.cache/
 
 # IDE/editor
 .vscode/
 .idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
 
-# Project-specific (do not publish local data, logs, checkpoints)
+# Logs and run artifacts
 logs/
-models/
-data/pipeline/
-data/**/*.db
-data/**/*.npz
-data/**/*.npy
-data/**/*.pt
-data/**/*.pth
-pipeline/results_*.txt
-hf_aparecium/
+*.log
+runs/
+lightning_logs/
+tensorboard/
+events.out.tfevents*
+wandb/
+mlruns/
+tmp/
+temp/
 
-# Common ML checkpoints (keep code-only repo clean)
+# Checkpoints / model artifacts
+checkpoints/
 *.pt
+*.pth
 *.ckpt
-*.bin
-*.safetensors
+*.onnx
 
-# Ignore python cache dirs
+# Data artifacts
+data/shards/
+raw_*.jsonl
+*.db
+*.sqlite
+*.parquet
+*.npz
+*.npy
+*.pkl
+*.index   # FAISS
 
-# Python temp files
-__pycache__
-.mypy_cache
-env/
-*.egg-info
+# Generated JSONL under package data
+aparecium_v2/data/*.jsonl
+!aparecium_v2/data/*.py
 
-# Notebook checkpoints
-.ipynb_checkpoints
+# Caches
+.cache/
+.huggingface/
+huggingface/
+.torch/
 
-# Anaconda checkpoints
-.spyproject
-
-# Coverage files
-.coverage
-
-# Merge files
-*.orig
-
-# OS temp files
-*~
-\#*\#
-.DS_Store
-
-# Ignore files in data, models, and logs directories
-data/*
-!data/.gitkeep
-models/*
-!models/.gitkeep
-logs/*
-!logs/.gitkeep
+# Tooling
+.cursor/
+.agent-tools/
