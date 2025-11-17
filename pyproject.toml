@@ -1,17 +1,30 @@
 
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aparecium-v2"
-version = "0.1.0"
-description = "Pooled-only embedding inversion for crypto tweets"
-authors = [{name="Your Org"}]
+name = "aparecium"
+version = "2.0.0"
+description = "Aparecium v2: pooled MPNet embedding reversal for crypto social-media posts."
+authors = [{name="SentiChain"}]
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "torch>=2.0",
   "transformers>=4.40",
-  "tqdm"
+  "tqdm",
+  "sentence-transformers>=2.2",
+  "huggingface-hub>=0.25",
+  "numpy>=1.23",
+  "fastapi>=0.110",
+  "uvicorn>=0.23",
 ]
+
+[project.urls]
+"Homepage" = "https://github.com/SentiChain/aparecium_train"
+"Source Code" = "https://github.com/SentiChain/aparecium_train/tree/main/aparecium"
+"Tracker" = "https://github.com/SentiChain/aparecium_train/issues"
+
+[tool.setuptools]
+packages = ["aparecium", "aparecium.aparecium"]
