@@ -1,58 +1,31 @@
-"""
-Embedding scorer utilities for decoding.
-
-Provides `MPNetEmbeddingScorer` to re-embed candidate strings with the same
-MPNet family model used to encode source memory, enabling outer-loop rescoring
-by cosine similarity.
-"""
-
-from typing import List, Optional
-import torch  # type: ignore
-from transformers import AutoTokenizer, AutoModel  # type: ignore
-
-from .utils import mean_pool
+import torch
+from sentence_transformers import SentenceTransformer
 
 
 class MPNetEmbeddingScorer:
-    """
-    Encode texts with MPNet and return mask-aware pooled vectors on a device.
+    """Utility to encode texts with all-mpnet-base-v2 and return pooled 768-D embeddings.
 
-    Intended for use during outer-loop rescoring.
+    encode_and_pool(texts) -> torch.FloatTensor of shape (N, 768), L2-normalized.
     """
 
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-mpnet-base-v2",
-        device: Optional[torch.device] = None,
+        device: str | None = None,
     ):
         if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name).to(self.device)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = SentenceTransformer(model_name, device=device)
         self.model.eval()
 
     @torch.no_grad()
-    def encode_and_pool(self, texts: List[str]) -> torch.Tensor:
-        """
-        Encode and pool texts to MPNet sentence vectors.
-
-        Args:
-                texts: list of strings to encode
-
-        Returns:
-                Tensor of shape (B, D), where D is the model hidden size.
-        """
-        inputs = self.tokenizer(
+    def encode_and_pool(self, texts: list[str]) -> torch.Tensor:
+        emb = self.model.encode(
             texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=384,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
-        input_ids = inputs["input_ids"].to(self.device)
-        attn = inputs["attention_mask"].to(self.device)
-        outputs = self.model(input_ids=input_ids, attention_mask=attn)
-        last_hidden = outputs.last_hidden_state  # (B, T, D)
-        pooled = mean_pool(last_hidden, attn)  # (B, D)
-        return pooled
+        if not isinstance(emb, torch.Tensor):
+            emb = torch.tensor(emb)
+        return emb  # (N, 768)

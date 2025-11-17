@@ -1,13 +1,17 @@
-__version__ = "0.3.0"
+"""Aparecium‑V2 (pooled‑only) — embedding inversion from MPNet pooled vectors.
 
-from .vectorizer import Vectorizer
-from .reverser import Seq2SeqReverser, TransformerSeq2SeqModel, generate_subsequent_mask
-from .decoding import MPNetEmbeddingScorer
+This package provides:
 
-__all__ = [
-    "Vectorizer",
-    "Seq2SeqReverser",
-    "TransformerSeq2SeqModel",
-    "generate_subsequent_mask",
-    "MPNetEmbeddingScorer",
-]
+- Low‑level components (EmbAdapter, Sketcher, Decoder, surrogate r).
+- Training scripts for S1 supervised and optional SCST (S2) fine‑tuning.
+- A high‑level :class:`Aparecium` wrapper for easy use from PyPI, which can
+  automatically download the S1 checkpoint from Hugging Face and expose simple
+  `invert_embedding` / `invert_text` methods.
+
+The class name :class:`Aparecium` is the main user‑facing API going forward.
+"""
+
+from .api import Aparecium  # primary user-facing name
+
+__all__ = ["Aparecium"]
+__version__ = "2.0.0"

@@ -1,72 +1,88 @@
-# Aparecium
+# Aparecium v2 – Pooled MPNet Reverser
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Aparecium is a Python package for revealing text from embedding vectors, particularly designed to work with SentiChain embeddings. Named after the Harry Potter spell that reveals hidden writing, Aparecium provides state-of-the-art tools for converting between text and vector representations, as well as reversing the embedding process to recover original text.
+Aparecium v2 is a Python package for **reconstructing crypto‑domain social‑media posts from a single pooled embedding vector**.
+It is the pooled‑embedding counterpart to the original token‑level seq2seq model
+[`SentiChain/aparecium-seq2seq-reverser`](https://huggingface.co/SentiChain/aparecium-seq2seq-reverser),
+but with a stricter input contract:
+
+- **Input**: one 768‑D pooled vector from `sentence-transformers/all-mpnet-base-v2` (not a token‑level matrix).
+- **Output**: natural‑language text that matches the crypto market context of the embedding.
+
+This package contains:
+
+- Low‑level components: EmbAdapter, Sketcher, Decoder, surrogate similarity scorer `r(x, e)`.
+- Training scripts for supervised S1 and optional SCST (S2) fine‑tuning.
+- A high‑level `Aparecium` wrapper for easy use from PyPI and Hugging Face Hub.
+
+---
 
 ## Features
 
-- **Text Vectorization**: Convert text into dense vector representations using pre-trained transformer models
-- **Embedding Reversal**: Reconstruct original text from embedding vectors using a Transformer-based sequence-to-sequence architecture
-- **Seamless Integration**: Works with SentiChain embeddings to reveal hidden content
-- **Modern Architecture**: Built on PyTorch and Transformers for optimal performance
-- **Extensible Design**: Easy to integrate with custom models and architectures
+- **Pooled‑only embedding reversal**: works directly from a single pooled MPNet embedding (size 768), no token‑level memory required.
+- **Crypto‑domain specialization**: trained on synthetic crypto social‑media posts (markets, DeFi, L2s, MEV, NFTs, governance).
+- **Modern architecture**:
+  - Multi‑channel EmbAdapter (pooled → pseudo‑sequence memory).
+  - Sketcher plan head (optional constraints from simple signals).
+  - Transformer decoder, surrogate similarity scorer, and beam‑search reranking.
+- **High‑level API**:
+  - `Aparecium.invert_embedding(...)` for direct vector → text.
+  - `Aparecium.invert_text(...)` for raw text → embed → invert (for diagnostics).
+- **Service‑ready**:
+  - FastAPI inference server with `/invert` endpoint, suitable for batch/online use.
 
 ## Limitations & Caveats
 
-- Complete reconstruction of original text from embeddings is not always guaranteed and depends heavily on the fidelity and nature of the embeddings.
-- For best results, ensure that the model and embeddings are aligned (e.g., same tokenization and dimension).
-- While Aparecium is designed for SentiChain embeddings, it can be adapted to other embedding pipelines if they provide a compatible dimensionality.
+- Reconstruction is **not exact**: outputs preserve semantic gist and entities but may differ in wording or style.
+- Quality depends on:
+  - Encoder alignment (`sentence-transformers/all-mpnet-base-v2`),
+  - Domain match (crypto / finance social‑media posts),
+  - Decode settings (beam size, constraints, rerank weights).
+- Data are **synthetic** crypto market posts, not real social‑media timelines; there may be domain‑shift in practice.
+- Do **not** use this model to attempt to reconstruct sensitive or personally identifiable content from embeddings.
 
-## Model Architecture
+---
 
-Aparecium employs a Transformer-based sequence-to-sequence architecture for text reconstruction. The model consists of:
+## Model Architecture (v2)
 
-- **Input Layer**: Processes embedding vectors of shape (sequence_length, d_model)
-- **Embedding Layer**: Combines token and positional embeddings
-- **Transformer Decoder Stack**: Multiple decoder layers with multi-head attention
-- **Output Layer**: Projects decoder outputs to vocabulary space
+At a high level, Aparecium v2 reverses a pooled vector \( e \in \mathbb{R}^{768} \) as follows:
 
-```mermaid
-graph TB
-    subgraph InputLayer["Input Layer"]
-        Input["Input Embeddings\n(seq_len × d_model)"]
-    end
+1. **EmbAdapter**: `e → H`
+   - Takes a pooled MPNet embedding and produces a multi‑scale pseudo‑sequence memory `H ∈ R^{B × S × D}`.
+2. **Sketcher** (optional at inference):
+   - Predicts simple crypto‑domain signals, such as presence of URLs or basic plan fields.
+3. **RealizerDecoder** (Transformer decoder):
+   - GPT‑style transformer decoder with cross‑attention over `H`.
+   - Typical configuration:
+     - `d_model = 768`
+     - `n_layer = 12`
+     - `n_head = 8`
+     - `d_ff = 3072`
+4. **Surrogate scorer `r(x, e)`**:
+   - Neural surrogate that approximates cosine similarity between the MPNet embedding of the generated text and the target embedding `e`.
+   - Used for sequence‑level reranking.
+5. **Decoding**:
+   - Deterministic beam search or stochastic sampling.
+   - Optional constraints (tickers/hashtags/amounts) and surrogate‑based rerank.
 
-    subgraph EmbeddingLayer["Embedding Layer"]
-        TokenEmb["Token Embedding\n(vocab_size → d_model)"]
-        PosEmb["Positional Embedding\n(seq_len → d_model)"]
-        Combined["Combined Embeddings\n(d_model)"]
-        TokenEmb --> Combined
-        PosEmb --> Combined
-    end
+The v2 S1 checkpoint released on Hugging Face at
+[`SentiChain/aparecium-v2-pooled-reverser`](https://huggingface.co/SentiChain/aparecium-v2-pooled-reverser)
+contains the EmbAdapter, Sketcher, Decoder, tokenizer name, and (optionally) surrogate `r` state.
 
-    subgraph DecoderStack["Transformer Decoder Stack"]
-        Dec1["Decoder Layer 1\n(nhead=8, dim_ff=2048)"]
-        Dec2["Decoder Layer 2\n(nhead=8, dim_ff=2048)"]
-        Dec1 --> Dec2
-    end
-
-    subgraph OutputLayer["Output Layer"]
-        FC["Linear Projection\n(d_model → vocab_size)"]
-        Output["Output Logits\n(seq_len × vocab_size)"]
-        FC --> Output
-    end
-
-    Input --> Dec1
-    Combined --> Dec1
-    Dec2 --> FC
-```
+---
 
 ## Installation
 
 ### From PyPI
 
+Once published as the new major version, you will be able to install with:
+
 ```bash
 pip install aparecium
 ```
 
-### From Source
+### From Source (this repo)
 
 ```bash
 git clone https://github.com/SentiChain/aparecium.git
@@ -74,170 +90,199 @@ cd aparecium
 pip install -e .
 ```
 
-## Quick Start
+This installs the `aparecium` package (v2 pooled‑only variant) in editable mode for development and experiments.
 
-### Text to Vector Conversion
+---
 
-```python
-from aparecium import Vectorizer
+## Quick Start (High‑Level API)
 
-# Initialize the vectorizer with a pre-trained model
-vectorizer = Vectorizer(model_name="sentence-transformers/all-mpnet-base-v2")
+### 1. Invert a pooled embedding from Python
 
-# Convert text to vector representation
-text = "This is sample text to be vectorized."
-embedding_vectors = vectorizer.encode(text)
-
-# embedding_vectors shape: (sequence_length, embedding_dimension)
-```
-
-### Vector to Text Reconstruction (from Hugging Face Hub)
+The HF v2 checkpoint lives at
+[`SentiChain/aparecium-v2-pooled-reverser`](https://huggingface.co/SentiChain/aparecium-v2-pooled-reverser).  
+The `Aparecium` wrapper downloads it automatically and exposes a simple interface:
 
 ```python
-from aparecium import Seq2SeqReverser
+from aparecium import Aparecium
+from sentence_transformers import SentenceTransformer
 
-# Load the pre-trained model from Hugging Face Hub
-reverser = Seq2SeqReverser.from_pretrained("SentiChain/aparecium-seq2seq-reverser")
+# 1) Embed a crypto-domain social-media post with pooled MPNet
+encoder = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+text = "Bitcoin ETF inflows hit a new weekly high as markets turn risk-on."
+e = encoder.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]  # shape (768,)
 
-# Reconstruct text from embedding vectors (expects token-level MPNet matrix)
-text_or_text_info = reverser.generate_text(
-    embedding_vectors,  # shape: (seq_len, 768)
-    max_length=128,
-    num_beams=8,
-    deterministic=True,
-    length_penalty_alpha=0.6,
-    lambda_sim=0.6,
-    rescore_every_k=4,
-    rescore_top_m=8,
-    beta=10.0,
-    enable_constraints=True,
-)
-print(text_or_text_info)
+# 2) Load Aparecium v2 (S1 baseline) from Hugging Face
+model = Aparecium()  # defaults to SentiChain/aparecium-v2-pooled-reverser, aparecium_v2_s1.pt
+
+# 3) Invert the pooled embedding
+res = model.invert_embedding(e, beam=5, max_len=64)
+print("Reconstruction:", res.text)
+print("Candidates:", res.candidates)
 ```
 
-Note: The pre-trained model is specifically trained on crypto market-related sentences. For best results, use it with similar content.
+### 2. End‑to‑end inversion from raw text
 
-Alternatively, you can load the model from a local directory:
+This is mostly useful for **diagnostics** (how much information is lost by pooling):
 
 ```python
-from aparecium import Seq2SeqReverser
+from aparecium import Aparecium
 
-# Initialize the reverser
-reverser = Seq2SeqReverser()
-
-# Load the pre-trained model from a local directory
-reverser.load_model("path/to/model/directory")
-
-# Reconstruct text from embedding vectors
-recovered_text = reverser.generate_text(embedding_vectors)
-print(recovered_text)
+model = Aparecium()
+text = "Ethereum L2 blob fees spiked after EIP-4844; MEV still shapes order flow."
+out = model.invert_text(text, beam=5, max_len=64)
+print(out.text)
 ```
 
-## Pipeline
+Internally this calls the same MPNet encoder you would use upstream and then runs the inversion pipeline.
 
-The `pipeline/` directory contains end-to-end scripts and documentation for data preparation, training, and evaluation. See `pipeline/README.md` for details, including CLI flags and examples.
+### 3. CLI usage
 
-Note: Pipeline scripts are repository-only and are not included in the PyPI package. If you installed via `pip install aparecium`, clone the repo to use the pipeline scripts.
+You can also use the package as a simple CLI:
 
-- `pipeline/prepare_db.py`: Cache token-level MPNet embeddings and texts into an SQLite database
-- `pipeline/train.py`: Train or resume the `Seq2SeqReverser` directly from cached embeddings
-- `pipeline/evaluate.py`: Evaluate model checkpoints
-- `pipeline/evaluate_prompts.py`: Evaluate prompts/decoding settings against cached data
-
-## Project Structure
-
-```
-aparecium/
-├── aparecium/         # Main package directory
-├── pipeline/          # Training/evaluation pipeline & docs
-├── tests/             # Unittest suite
-├── data/              # Data directory
-├── models/            # Model checkpoints and configurations
-└── logs/              # Training and evaluation logs
+```bash
+echo "Macro: DXY rallies while risk assets chop; crypto narratives rotate to AI tokens." | \
+  python -m aparecium
 ```
 
-## Development Setup
+The CLI uses the default HF repo and S1 checkpoint and prints one reconstructed text to stdout.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/SentiChain/aparecium.git
-   cd aparecium
-   ```
+---
 
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
+## Training & Pipeline (v2)
 
-3. Install development dependencies:
-   ```bash
-   pip install -e .
-   pip install pytest
-   ```
+The training and data‑prep scripts live inside the package under `aparecium.aparecium`:
 
-4. Run tests:
-   ```bash
-   pytest
-   ```
+- `aparecium/aparecium/scripts/embed_mpnet.py` – embed raw posts into pooled MPNet vectors.
+- `aparecium/aparecium/train/train_s1_supervised.py` – S1 supervised training.
+- `aparecium/aparecium/train/train_surrogate_r.py` – surrogate `r` training.
+- `aparecium/aparecium/train/train_s2_scst.py` – optional SCST RL fine‑tuning.
+- `aparecium/aparecium/infer/service.py` – FastAPI inference service.
+- `aparecium/aparecium/data/*.py` – dataset and crypto plan utilities.
 
-## Model Input Contract & Defaults
+Example S1 training command (from the `aparecium` project root):
 
-- Input to `Seq2SeqReverser.generate_text(...)` must be a token-level MPNet matrix with shape `(src_len, d_model)` (not a pooled vector). Use `Vectorizer.encode(text, max_length=384)` to produce it.
-- Suggested defaults that “just work” for tweets:
-  - beams: `num_beams=5`
-  - length penalty: `length_penalty_alpha=0.6`
-  - embedding fusion: `lambda_sim=0.3`
-  - rescoring cadence/top-M: `rescore_every_k=4`, `rescore_top_m=8`
-  - cosine scale: `beta=10.0`
-  - target length: `max_length≈128`
-  - determinism: `deterministic=True`
-  - constraints: `enable_constraints=True`
+```bash
+python -m aparecium.aparecium.train.train_s1_supervised \
+  --shards ./data/train \
+  --val_shards ./data/val \
+  --save_dir ./checkpoints \
+  --batch_size 64 \
+  --epochs 1 \
+  --steps 6000 \
+  --warmup_steps 1000 \
+  --lr 3e-4 \
+  --max_len 96 \
+  --device cuda \
+  --log_every 50
+```
 
-### Confidence semantics
-- If `return_confidence=True`, generation returns `(text, info)` where `info` includes:
-  - `cosine`: final cosine similarity to the MPNet target vector (higher is better)
-  - `score_norm`: length-penalized LM score
-  - `fused_score`: fused value of LM score and cosine, used for ranking
-  - `used_refinement_steps`: 0 by default (reserved for future optional refinement)
+> Note: for most users of the PyPI package, you **do not** need to run training. You can simply use the HF checkpoint with `Aparecium`.
 
-## Requirements
+---
 
-- Python ≥ 3.9
-- PyTorch 2.5.1
-- Transformers 4.47.1
-- SentiChain ≥ 0.2.2
-- NumPy 1.26.4
-- huggingface-hub ≥ 0.24.0
+## Inference Service
 
-Optional:
-- openai == 1.58.1 (only needed for certain evaluation utilities)
+For higher‑throughput use, you can run the FastAPI service:
 
-Note: GPU (CUDA) is auto-detected when available; CPU works but will be slower for training and generation.
+```bash
+python -m aparecium.aparecium.infer.service --ckpt checkpoints/aparecium_v2_s1.pt
+```
 
-## Contributing
+Then POST to `/invert`:
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on our code of conduct and the process for submitting pull requests.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use Aparecium in your research, please cite:
-
-```bibtex
-@software{aparecium2025,
-  author = {Chen, Edward},
-  title = {Aparecium: Text Reconstruction from Embedding Vectors},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/SentiChain/aparecium}
+```json
+{
+  "embedding": [0.123, 0.456, "...", 0.789],
+  "deterministic": true,
+  "beam": 5,
+  "max_len": 64,
+  "constraints": true,
+  "final_mpnet": true
 }
 ```
 
-## Links
+The response includes:
 
-- [GitHub Repository](https://github.com/SentiChain/aparecium)
-- [Issue Tracker](https://github.com/SentiChain/aparecium/issues)
+- `text`: top‑1 reconstruction,
+- `candidates`: all beam candidates,
+- `scores.lm_logp[]`: language‑model log‑prob scores,
+- `scores.cos_mpnet[]` (if `final_mpnet=true`): MPNet cosine per candidate,
+- `plan`: optional extracted or predicted plan information.
+
+---
+
+## Model Input Contract & Defaults
+
+- Input to the v2 reverser is a **pooled MPNet vector** with shape `(768,)` (L2‑normalized recommended).
+- Recommended encoder: `sentence-transformers/all-mpnet-base-v2`.
+- Suggested decode defaults for general use:
+  - Beam size: `beam=5`
+  - Max length: `max_len≈64–96`
+  - Determinism: `deterministic beam` (via `deterministic_beam_search`)
+  - Rerank weight for surrogate `r`: `alpha≈1.0–1.5`
+  - Optional: use constraints for tickers/hashtags/amounts if plans are available.
+
+This differs from the v1 seq2seq model, which expects a token‑level `(seq_len, 768)` matrix and uses a slightly different decode configuration (see the v1 model card at
+[`SentiChain/aparecium-seq2seq-reverser`](https://huggingface.co/SentiChain/aparecium-seq2seq-reverser)).
+
+---
+
+## Requirements
+
+At runtime, Aparecium v2 depends on:
+
+- Python ≥ 3.9
+- PyTorch ≥ 2.0
+- Transformers ≥ 4.40
+- sentence-transformers ≥ 2.2
+- huggingface-hub ≥ 0.25
+- NumPy ≥ 1.23
+- tqdm
+
+GPU (CUDA) is auto‑detected when available; CPU works but is slower for training and beam‑search decoding.
+
+---
+
+## Project Structure (v2 subset)
+
+```text
+aparecium/
+├── aparecium/              # v2 pooled-only Python package
+│   ├── api.py              # High-level Aparecium wrapper
+│   ├── __init__.py         # Package export
+│   ├── __main__.py         # CLI entrypoint (python -m aparecium)
+│   ├── config.py           # Config utilities
+│   ├── data/               # Dataset + plan utilities
+│   ├── infer/              # Decoding + FastAPI service
+│   ├── models/             # EmbAdapter, Decoder, Sketcher, SurrogateR, Constraints
+│   ├── scripts/            # Data prep, embedding, inspection
+│   ├── train/              # S1/S2/r training scripts
+│   └── utils/              # Common helpers, tokenization utilities
+├── checkpoints/            # Local training outputs (S1/S2/r)
+└── data/                   # Local data shards (train/val/test)
+```
+
+---
+
+## License
+
+This project is licensed under the MIT License – see the `LICENSE` file for details.
+
+---
+
+## Citation
+
+If you use Aparecium v2 in research or production, please cite the project and, when relevant, also reference the v1 model card:
+
+```bibtex
+@software{apareciumv2_2025,
+  author    = {SentiChain},
+  title     = {Aparecium v2: Pooled MPNet Embedding Reversal for Crypto Social-Media Posts},
+  year      = {2025},
+  publisher = {Hugging Face},
+  url       = {https://huggingface.co/SentiChain/aparecium-v2-pooled-reverser}
+}
+```
+
+For the original token‑level seq2seq reverser, see:
+[`SentiChain/aparecium-seq2seq-reverser`](https://huggingface.co/SentiChain/aparecium-seq2seq-reverser).
