@@ -1,4 +1,4 @@
-# Aparecium v2 – Pooled MPNet Reverser (Python Package)
+# Aparecium v2 – Pooled MPNet Reverser
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
