@@ -22,9 +22,13 @@ dependencies = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/SentiChain/aparecium_train"
-"Source Code" = "https://github.com/SentiChain/aparecium_train/tree/main/aparecium"
-"Tracker" = "https://github.com/SentiChain/aparecium_train/issues"
+"Homepage" = "https://github.com/SentiChain/aparecium"
+"Source Code" = "https://github.com/SentiChain/aparecium"
+"Tracker" = "https://github.com/SentiChain/aparecium/issues"
 
-[tool.setuptools]
-packages = ["aparecium", "aparecium.aparecium"]
+[project.optional-dependencies]
+dev = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["aparecium*"]

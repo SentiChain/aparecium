@@ -27,8 +27,8 @@ This package contains:
   - Sketcher plan head (optional constraints from simple signals).
   - Transformer decoder, surrogate similarity scorer, and beam‑search reranking.
 - **High‑level API**:
-  - `ApareciumV2.invert_embedding(...)` for direct vector → text.
-  - `ApareciumV2.invert_text(...)` for raw text → embed → invert (for diagnostics).
+  - `Aparecium.invert_embedding(...)` for direct vector → text.
+  - `Aparecium.invert_text(...)` for raw text → embed → invert (for diagnostics).
 - **Service‑ready**:
   - FastAPI inference server with `/invert` endpoint, suitable for batch/online use.
 
@@ -85,8 +85,8 @@ pip install aparecium
 ### From Source (this repo)
 
 ```bash
-git clone https://github.com/SentiChain/aparecium_train.git
-cd aparecium_train/aparecium
+git clone https://github.com/SentiChain/aparecium.git
+cd aparecium
 pip install -e .
 ```
 
@@ -100,10 +100,10 @@ This installs the `aparecium` package (v2 pooled‑only variant) in editable mod
 
 The HF v2 checkpoint lives at
 [`SentiChain/aparecium-v2-pooled-reverser`](https://huggingface.co/SentiChain/aparecium-v2-pooled-reverser).  
-The `ApareciumV2` wrapper downloads it automatically and exposes a simple interface:
+The `Aparecium` wrapper downloads it automatically and exposes a simple interface:
 
 ```python
-from aparecium import ApareciumV2
+from aparecium import Aparecium
 from sentence_transformers import SentenceTransformer
 
 # 1) Embed a crypto-domain social-media post with pooled MPNet
@@ -112,7 +112,7 @@ text = "Bitcoin ETF inflows hit a new weekly high as markets turn risk-on."
 e = encoder.encode([text], convert_to_numpy=True, normalize_embeddings=True)[0]  # shape (768,)
 
 # 2) Load Aparecium v2 (S1 baseline) from Hugging Face
-model = ApareciumV2()  # defaults to SentiChain/aparecium-v2-pooled-reverser, aparecium_v2_s1.pt
+model = Aparecium()  # defaults to SentiChain/aparecium-v2-pooled-reverser, aparecium_v2_s1.pt
 
 # 3) Invert the pooled embedding
 res = model.invert_embedding(e, beam=5, max_len=64)
@@ -125,9 +125,9 @@ print("Candidates:", res.candidates)
 This is mostly useful for **diagnostics** (how much information is lost by pooling):
 
 ```python
-from aparecium import ApareciumV2
+from aparecium import Aparecium
 
-model = ApareciumV2()
+model = Aparecium()
 text = "Ethereum L2 blob fees spiked after EIP-4844; MEV still shapes order flow."
 out = model.invert_text(text, beam=5, max_len=64)
 print(out.text)
@@ -176,7 +176,7 @@ python -m aparecium.aparecium.train.train_s1_supervised \
   --log_every 50
 ```
 
-> Note: for most users of the PyPI package, you **do not** need to run training. You can simply use the HF checkpoint with `ApareciumV2`.
+> Note: for most users of the PyPI package, you **do not** need to run training. You can simply use the HF checkpoint with `Aparecium`.
 
 ---
 
@@ -248,7 +248,7 @@ GPU (CUDA) is auto‑detected when available; CPU works but is slower for traini
 ```text
 aparecium/
 ├── aparecium/              # v2 pooled-only Python package
-│   ├── api.py              # High-level ApareciumV2 wrapper
+│   ├── api.py              # High-level Aparecium wrapper
 │   ├── __init__.py         # Package export
 │   ├── __main__.py         # CLI entrypoint (python -m aparecium)
 │   ├── config.py           # Config utilities

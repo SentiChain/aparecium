@@ -3,7 +3,7 @@ Simple CLI entrypoint for Aparecium v2.
 
 Example:
     echo "Bitcoin ETF inflows hit a new weekly high as markets turn risk-on." ^| ^
-      python -m aparecium "SentiChain/aparecium-v2-pooled-reverser"
+      python -m aparecium
 """
 
 from __future__ import annotations
