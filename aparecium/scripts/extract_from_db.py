@@ -1,7 +1,7 @@
 """Extract texts from a SQLite DB into a raw JSONL for embedding.
 
 Usage:
-    python -m aparecium_v2.scripts.extract_from_db \
+    python -m aparecium.scripts.extract_from_db \
         --db_path tweets.db \
         --table tweets \
         --text_col text \
@@ -14,7 +14,6 @@ Each output line: { "text": str }
 import argparse
 import json
 import sqlite3
-from typing import Optional
 
 
 def parse_args():

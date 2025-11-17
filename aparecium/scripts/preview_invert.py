@@ -1,7 +1,7 @@
 """Preview inversion quality on a small JSONL of embeddings.
 
 Usage:
-  python -m aparecium_v2.scripts.preview_invert \
+  python -m aparecium.scripts.preview_invert \
     --ckpt checkpoints/aparecium_v2_s2.pt \
     --emb_jsonl aparecium_v2/data/preview_10_emb.jsonl \
     --beam 5 --max_len 64 --limit 10

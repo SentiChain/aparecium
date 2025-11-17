@@ -9,7 +9,7 @@ Features:
 - Periodic progress logs ("--log-every").
 """
 
-import os, sys, json, argparse, numpy as np
+import os, json, argparse
 from sentence_transformers import SentenceTransformer
 import torch
 from ..data.plans import extract_plan

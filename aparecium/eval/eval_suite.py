@@ -7,7 +7,6 @@ from ..models.surrogate_r import SurrogateR
 from ..infer.decode import deterministic_beam_search
 import torch
 from .metrics import exact_match, number_accuracy
-from ..data.plans import extract_plan
 
 
 def parse_args():

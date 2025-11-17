@@ -1,4 +1,4 @@
-import os, json, argparse
+import os, argparse
 import torch
 from fastapi import FastAPI
 import uvicorn

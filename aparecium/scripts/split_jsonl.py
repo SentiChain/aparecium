@@ -1,7 +1,7 @@
 """Split a raw JSONL into train/val/test sets with ratios.
 
 Usage:
-  python -m aparecium_v2.scripts.split_jsonl \
+  python -m aparecium.scripts.split_jsonl \
     --input raw_10k.jsonl \
     --out_dir data/shards \
     --train 0.9 --val 0.05 --test 0.05
@@ -10,7 +10,7 @@ Outputs:
   data/shards/train.jsonl, val.jsonl, test.jsonl
 """
 
-import os, json, random, argparse
+import os, random, argparse
 
 
 def parse_args():

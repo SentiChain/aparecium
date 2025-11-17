@@ -1,6 +1,6 @@
 """Split a large JSONL into multiple shard JSONLs of size N."""
 
-import os, json, argparse
+import os, argparse
 
 
 def parse_args():

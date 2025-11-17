@@ -1,5 +1,4 @@
-import re, numpy as np
-from typing import List, Dict
+from typing import List
 
 
 def normalize_text(s: str) -> str:
