@@ -198,7 +198,9 @@ def main():
     t_b = calib["encoders"]["bge"]["same_meaning_threshold"]["threshold"]
     lines += [f"'Same meaning' = cosine at or above the level STS-B humans rate >= 4/5 "
               f"(MPNet {t_m:.3f}, independent {t_b:.3f}). 'Lift' = mean cosine to the right "
-              f"original minus mean cosine to unrelated originals (item-specific signal).", ""]
+              f"original minus mean cosine to unrelated originals (item-specific signal).", "",
+              "Read the independent-encoder columns first: v3 and nn pick their output by MPNet "
+              "similarity to the input, so their MPNet columns are flattered by construction.", ""]
     for name, label in SET_LABELS.items():
         lines += [f"## {label}", "", "| System | " + " | ".join(c[1] for c in COLUMNS) + " |",
                   "|---|" + "---|" * len(COLUMNS)]
