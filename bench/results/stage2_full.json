@@ -1,0 +1,468 @@
+{
+  "subset": "full",
+  "calibration": {
+    "same_meaning_score": 4.0,
+    "encoders": {
+      "mpnet": {
+        "model": "sentence-transformers/all-mpnet-base-v2",
+        "stsb_spearman": 0.8342216139244768,
+        "stsb_median_cos_by_human_score": {
+          "0-1": {
+            "n": 243,
+            "median_cos": 0.1801169514656067
+          },
+          "1-2": {
+            "n": 198,
+            "median_cos": 0.43541669845581055
+          },
+          "2-3": {
+            "n": 265,
+            "median_cos": 0.5903246402740479
+          },
+          "3-4": {
+            "n": 335,
+            "median_cos": 0.762051522731781
+          },
+          "4-5": {
+            "n": 338,
+            "median_cos": 0.8771785497665405
+          }
+        },
+        "same_meaning_threshold": {
+          "threshold": 0.8180000185966492,
+          "f1": 0.6764275256222548,
+          "precision": 0.6695652173913044,
+          "recall": 0.6834319526627219
+        },
+        "paws": {
+          "median_cos_paraphrase": 0.984563946723938,
+          "median_cos_not_paraphrase": 0.9725561738014221,
+          "auc": 0.6453037261962891
+        }
+      },
+      "bge": {
+        "model": "BAAI/bge-small-en-v1.5",
+        "stsb_spearman": 0.8586418275215224,
+        "stsb_median_cos_by_human_score": {
+          "0-1": {
+            "n": 243,
+            "median_cos": 0.5474139451980591
+          },
+          "1-2": {
+            "n": 198,
+            "median_cos": 0.6888393759727478
+          },
+          "2-3": {
+            "n": 265,
+            "median_cos": 0.7665378451347351
+          },
+          "3-4": {
+            "n": 335,
+            "median_cos": 0.843224048614502
+          },
+          "4-5": {
+            "n": 338,
+            "median_cos": 0.9211926460266113
+          }
+        },
+        "same_meaning_threshold": {
+          "threshold": 0.8640000224113464,
+          "f1": 0.707732634338139,
+          "precision": 0.6352941176470588,
+          "recall": 0.7988165680473372
+        },
+        "paws": {
+          "median_cos_paraphrase": 0.988986611366272,
+          "median_cos_not_paraphrase": 0.9853599667549133,
+          "auc": 0.5868356227874756
+        }
+      }
+    }
+  },
+  "results": {
+    "nn_stage1": {
+      "A_heldout": {
+        "n": 350,
+        "cos_mpnet": 0.4870620369911194,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.44798582047224045,
+        "cos_indep": 0.6199284195899963,
+        "lift_indep": 0.21683698892593384,
+        "same_meaning_indep": 0.0,
+        "bleu": 1.556601137696119,
+        "token_f1": 0.14297081906373615,
+        "rouge_l": 0.12166379317428365,
+        "exact": 0.0,
+        "names_numbers_kept": 0.10173407613474206,
+        "avg_tokens": 26.145714285714284,
+        "ref_avg_tokens": 26.217142857142857,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 4.337923867361886e-05
+      },
+      "B_unseen_outlets": {
+        "n": 300,
+        "cos_mpnet": 0.4307903051376343,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.3853818438947201,
+        "cos_indep": 0.5966758131980896,
+        "lift_indep": 0.1886235773563385,
+        "same_meaning_indep": 0.0,
+        "bleu": 0.5294261332385723,
+        "token_f1": 0.12600143753532017,
+        "rouge_l": 0.10369834581486122,
+        "exact": 0.0,
+        "names_numbers_kept": 0.08804581144438794,
+        "avg_tokens": 30.913333333333334,
+        "ref_avg_tokens": 21.323333333333334,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 3.454287846883138e-05
+      },
+      "C_bbc_2025_days": {
+        "n": 272,
+        "cos_mpnet": 0.4446079730987549,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.3886302821338177,
+        "cos_indep": 0.5833874344825745,
+        "lift_indep": 0.18548250198364258,
+        "same_meaning_indep": 0.0,
+        "bleu": 0.3227892205949045,
+        "token_f1": 0.11619828599672184,
+        "rouge_l": 0.10480317462508093,
+        "exact": 0.0,
+        "names_numbers_kept": 0.050100319234551875,
+        "avg_tokens": 28.172794117647058,
+        "ref_avg_tokens": 22.834558823529413,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "day_gist_cos": 0.823839008808136,
+        "day_gist_margin": 0.11909687519073486,
+        "day_gist_margin_per_day": {
+          "2025-02-10": 0.14226442575454712,
+          "2025-03-25": 0.13237148523330688,
+          "2025-04-17": 0.08603167533874512,
+          "2025-05-05": 0.10072016716003418,
+          "2025-06-13": 0.13409662246704102
+        },
+        "day_gist_cos_indep": 0.9651381134986877,
+        "day_gist_margin_indep": 0.011405277252197265,
+        "day_gist_margin_indep_per_day": {
+          "2025-02-10": 0.014599204063415527,
+          "2025-03-25": 0.006620943546295166,
+          "2025-04-17": 0.009805917739868164,
+          "2025-05-05": 0.011213123798370361,
+          "2025-06-13": 0.01478719711303711
+        },
+        "sec_per_item": 2.8874944238101735e-05
+      },
+      "D_other_registers": {
+        "n": 300,
+        "cos_mpnet": 0.39669063687324524,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.3390715457499027,
+        "cos_indep": 0.5870435833930969,
+        "lift_indep": 0.15016305446624756,
+        "same_meaning_indep": 0.0,
+        "bleu": 0.11510525502223323,
+        "token_f1": 0.0750514446644139,
+        "rouge_l": 0.0724047009237359,
+        "exact": 0.0,
+        "names_numbers_kept": 0.054857954545454536,
+        "avg_tokens": 25.196666666666665,
+        "ref_avg_tokens": 18.043333333333333,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 2.7806758880615233e-05
+      }
+    },
+    "nn_stage2": {
+      "A_heldout": {
+        "n": 350,
+        "cos_mpnet": 0.568585991859436,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.53154556453228,
+        "cos_indep": 0.6634491086006165,
+        "lift_indep": 0.26081475615501404,
+        "same_meaning_indep": 0.0,
+        "bleu": 2.5795899538682914,
+        "token_f1": 0.18457079138854068,
+        "rouge_l": 0.1556577680760229,
+        "exact": 0.0,
+        "names_numbers_kept": 0.17440294814323673,
+        "avg_tokens": 26.645714285714284,
+        "ref_avg_tokens": 26.217142857142857,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 0.00015490055084228517
+      },
+      "B_unseen_outlets": {
+        "n": 300,
+        "cos_mpnet": 0.5176519751548767,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.4709928147494793,
+        "cos_indep": 0.6364775896072388,
+        "lift_indep": 0.23071259260177612,
+        "same_meaning_indep": 0.0,
+        "bleu": 1.2798255499442375,
+        "token_f1": 0.16099691882015776,
+        "rouge_l": 0.13527280309604806,
+        "exact": 0.0,
+        "names_numbers_kept": 0.1559029543015308,
+        "avg_tokens": 28.976666666666667,
+        "ref_avg_tokens": 21.323333333333334,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 0.0001746964454650879
+      },
+      "C_bbc_2025_days": {
+        "n": 272,
+        "cos_mpnet": 0.5164655447006226,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.4586626961827278,
+        "cos_indep": 0.6154652833938599,
+        "lift_indep": 0.2176249623298645,
+        "same_meaning_indep": 0.0,
+        "bleu": 0.5170711837856824,
+        "token_f1": 0.1505114757444016,
+        "rouge_l": 0.12470277597756428,
+        "exact": 0.0,
+        "names_numbers_kept": 0.09276208888659132,
+        "avg_tokens": 27.665441176470587,
+        "ref_avg_tokens": 22.834558823529413,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "day_gist_cos": 0.8660351037979126,
+        "day_gist_margin": 0.145988392829895,
+        "day_gist_margin_per_day": {
+          "2025-02-10": 0.1195138692855835,
+          "2025-03-25": 0.14544808864593506,
+          "2025-04-17": 0.12098610401153564,
+          "2025-05-05": 0.1780240535736084,
+          "2025-06-13": 0.1659698486328125
+        },
+        "day_gist_cos_indep": 0.9736695051193237,
+        "day_gist_margin_indep": 0.015204250812530518,
+        "day_gist_margin_indep_per_day": {
+          "2025-02-10": 0.01232898235321045,
+          "2025-03-25": 0.012731611728668213,
+          "2025-04-17": 0.012642741203308105,
+          "2025-05-05": 0.022285878658294678,
+          "2025-06-13": 0.016032040119171143
+        },
+        "sec_per_item": 0.0001494305975296918
+      },
+      "D_other_registers": {
+        "n": 300,
+        "cos_mpnet": 0.47159668803215027,
+        "same_meaning_mpnet": 0.0,
+        "lift_mpnet": 0.4111722856760025,
+        "cos_indep": 0.6393077373504639,
+        "lift_indep": 0.18753081560134888,
+        "same_meaning_indep": 0.0,
+        "bleu": 0.24711163658931493,
+        "token_f1": 0.09737720855319688,
+        "rouge_l": 0.09261033070604759,
+        "exact": 0.0,
+        "names_numbers_kept": 0.10647371147371147,
+        "avg_tokens": 24.49,
+        "ref_avg_tokens": 18.043333333333333,
+        "stopped_rate": null,
+        "distinct_candidates": null,
+        "sec_per_item": 0.0001472934087117513
+      }
+    },
+    "v3s1_gpt2lora": {
+      "A_heldout": {
+        "n": 350,
+        "cos_mpnet": 0.6390619874000549,
+        "same_meaning_mpnet": 0.04285714285714286,
+        "lift_mpnet": 0.6059600450098515,
+        "cos_indep": 0.7128058075904846,
+        "lift_indep": 0.31732800602912903,
+        "same_meaning_indep": 0.02,
+        "bleu": 2.069675246904173,
+        "token_f1": 0.23908854737230237,
+        "rouge_l": 0.20149052502888676,
+        "exact": 0.0,
+        "names_numbers_kept": 0.16875679444491876,
+        "avg_tokens": 21.65714285714286,
+        "ref_avg_tokens": 26.217142857142857,
+        "stopped_rate": 0.9885714285714285,
+        "distinct_candidates": 4.991428571428571,
+        "sec_per_item": 0.1805248941693987
+      },
+      "B_unseen_outlets": {
+        "n": 300,
+        "cos_mpnet": 0.5977376103401184,
+        "same_meaning_mpnet": 0.016666666666666666,
+        "lift_mpnet": 0.5472022853791714,
+        "cos_indep": 0.698169469833374,
+        "lift_indep": 0.2909718155860901,
+        "same_meaning_indep": 0.013333333333333334,
+        "bleu": 2.4439404232145905,
+        "token_f1": 0.22393100475419322,
+        "rouge_l": 0.1888040212763743,
+        "exact": 0.0,
+        "names_numbers_kept": 0.13232502965599052,
+        "avg_tokens": 25.096666666666668,
+        "ref_avg_tokens": 21.323333333333334,
+        "stopped_rate": 1.0,
+        "distinct_candidates": 5.0,
+        "sec_per_item": 0.17685562054316203
+      },
+      "C_bbc_2025_days": {
+        "n": 272,
+        "cos_mpnet": 0.6064556837081909,
+        "same_meaning_mpnet": 0.01838235294117647,
+        "lift_mpnet": 0.5495227947831154,
+        "cos_indep": 0.6855583190917969,
+        "lift_indep": 0.28871604800224304,
+        "same_meaning_indep": 0.003676470588235294,
+        "bleu": 2.1374856643482474,
+        "token_f1": 0.22080631949589444,
+        "rouge_l": 0.18102007048207178,
+        "exact": 0.0,
+        "names_numbers_kept": 0.11393207203136436,
+        "avg_tokens": 25.24264705882353,
+        "ref_avg_tokens": 22.834558823529413,
+        "stopped_rate": 0.9963235294117647,
+        "distinct_candidates": 5.0,
+        "day_gist_cos": 0.8729633927345276,
+        "day_gist_margin": 0.1511116623878479,
+        "day_gist_margin_per_day": {
+          "2025-02-10": 0.13968348503112793,
+          "2025-03-25": 0.16193068027496338,
+          "2025-04-17": 0.15304994583129883,
+          "2025-05-05": 0.16721856594085693,
+          "2025-06-13": 0.13367563486099243
+        },
+        "day_gist_cos_indep": 0.9798985838890075,
+        "day_gist_margin_indep": 0.016602683067321777,
+        "day_gist_margin_indep_per_day": {
+          "2025-02-10": 0.014408111572265625,
+          "2025-03-25": 0.01752018928527832,
+          "2025-04-17": 0.019591689109802246,
+          "2025-05-05": 0.019563496112823486,
+          "2025-06-13": 0.011929929256439209
+        },
+        "sec_per_item": 0.17807744092801037
+      },
+      "D_other_registers": {
+        "n": 300,
+        "cos_mpnet": 0.4915744960308075,
+        "same_meaning_mpnet": 0.013333333333333334,
+        "lift_mpnet": 0.4282645434141159,
+        "cos_indep": 0.6586380004882812,
+        "lift_indep": 0.21411338448524475,
+        "same_meaning_indep": 0.006666666666666667,
+        "bleu": 0.5155558764646503,
+        "token_f1": 0.1409965148687098,
+        "rouge_l": 0.131238089230729,
+        "exact": 0.0,
+        "names_numbers_kept": 0.10897175740925741,
+        "avg_tokens": 17.65,
+        "ref_avg_tokens": 18.043333333333333,
+        "stopped_rate": 1.0,
+        "distinct_candidates": 4.993333333333333,
+        "sec_per_item": 0.18257896979649862
+      }
+    },
+    "v3s2_gpt2lora": {
+      "A_heldout": {
+        "n": 350,
+        "cos_mpnet": 0.7487636208534241,
+        "same_meaning_mpnet": 0.2742857142857143,
+        "lift_mpnet": 0.715975284576416,
+        "cos_indep": 0.7829731106758118,
+        "lift_indep": 0.3875451982021332,
+        "same_meaning_indep": 0.15714285714285714,
+        "bleu": 4.38185412549741,
+        "token_f1": 0.32837040779730536,
+        "rouge_l": 0.2708917433745265,
+        "exact": 0.0,
+        "names_numbers_kept": 0.28467066353303866,
+        "avg_tokens": 23.36285714285714,
+        "ref_avg_tokens": 26.217142857142857,
+        "stopped_rate": 0.9885714285714285,
+        "distinct_candidates": 4.968571428571429,
+        "sec_per_item": 0.25413827691759383
+      },
+      "B_unseen_outlets": {
+        "n": 300,
+        "cos_mpnet": 0.7134605646133423,
+        "same_meaning_mpnet": 0.18666666666666668,
+        "lift_mpnet": 0.6655240133404732,
+        "cos_indep": 0.760118842124939,
+        "lift_indep": 0.35315626859664917,
+        "same_meaning_indep": 0.1,
+        "bleu": 4.45459608146632,
+        "token_f1": 0.29875337784947525,
+        "rouge_l": 0.24920444131821445,
+        "exact": 0.0,
+        "names_numbers_kept": 0.21566966050951814,
+        "avg_tokens": 23.116666666666667,
+        "ref_avg_tokens": 21.323333333333334,
+        "stopped_rate": 0.9966666666666667,
+        "distinct_candidates": 4.996666666666667,
+        "sec_per_item": 0.21927298307418824
+      },
+      "C_bbc_2025_days": {
+        "n": 272,
+        "cos_mpnet": 0.7133015990257263,
+        "same_meaning_mpnet": 0.1323529411764706,
+        "lift_mpnet": 0.6582307703793049,
+        "cos_indep": 0.7513875961303711,
+        "lift_indep": 0.35537800192832947,
+        "same_meaning_indep": 0.05514705882352941,
+        "bleu": 3.5902032374349098,
+        "token_f1": 0.2941952382726895,
+        "rouge_l": 0.2380122299770297,
+        "exact": 0.0,
+        "names_numbers_kept": 0.1820318717598682,
+        "avg_tokens": 23.74264705882353,
+        "ref_avg_tokens": 22.834558823529413,
+        "stopped_rate": 1.0,
+        "distinct_candidates": 5.0,
+        "day_gist_cos": 0.9129880547523499,
+        "day_gist_margin": 0.19803435802459718,
+        "day_gist_margin_per_day": {
+          "2025-02-10": 0.18001049757003784,
+          "2025-03-25": 0.19164717197418213,
+          "2025-04-17": 0.21828293800354004,
+          "2025-05-05": 0.19404441118240356,
+          "2025-06-13": 0.20618677139282227
+        },
+        "day_gist_cos_indep": 0.98589026927948,
+        "day_gist_margin_indep": 0.02032710313796997,
+        "day_gist_margin_indep_per_day": {
+          "2025-02-10": 0.01745659112930298,
+          "2025-03-25": 0.02100372314453125,
+          "2025-04-17": 0.021225154399871826,
+          "2025-05-05": 0.021310925483703613,
+          "2025-06-13": 0.020639121532440186
+        },
+        "sec_per_item": 0.2243195833528743
+      },
+      "D_other_registers": {
+        "n": 300,
+        "cos_mpnet": 0.5985798239707947,
+        "same_meaning_mpnet": 0.07666666666666666,
+        "lift_mpnet": 0.5333845913410187,
+        "cos_indep": 0.722034215927124,
+        "lift_indep": 0.26209208369255066,
+        "same_meaning_indep": 0.05,
+        "bleu": 0.551550060065852,
+        "token_f1": 0.19580079774152787,
+        "rouge_l": 0.17819522188502057,
+        "exact": 0.0,
+        "names_numbers_kept": 0.16981335793835795,
+        "avg_tokens": 17.38,
+        "ref_avg_tokens": 18.043333333333333,
+        "stopped_rate": 0.99,
+        "distinct_candidates": 4.99,
+        "sec_per_item": 0.25045968612035113
+      }
+    }
+  }
+}
