@@ -52,6 +52,7 @@ checkpoints/
 
 # Data artifacts
 data/shards/
+data/bench/
 raw_*.jsonl
 *.db
 *.sqlite

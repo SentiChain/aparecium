@@ -1,0 +1,79 @@
+{
+  "same_meaning_score": 4.0,
+  "encoders": {
+    "mpnet": {
+      "model": "sentence-transformers/all-mpnet-base-v2",
+      "stsb_spearman": 0.8342216139244768,
+      "stsb_median_cos_by_human_score": {
+        "0-1": {
+          "n": 243,
+          "median_cos": 0.1801169514656067
+        },
+        "1-2": {
+          "n": 198,
+          "median_cos": 0.43541669845581055
+        },
+        "2-3": {
+          "n": 265,
+          "median_cos": 0.5903246402740479
+        },
+        "3-4": {
+          "n": 335,
+          "median_cos": 0.762051522731781
+        },
+        "4-5": {
+          "n": 338,
+          "median_cos": 0.8771785497665405
+        }
+      },
+      "same_meaning_threshold": {
+        "threshold": 0.8180000185966492,
+        "f1": 0.6764275256222548,
+        "precision": 0.6695652173913044,
+        "recall": 0.6834319526627219
+      },
+      "paws": {
+        "median_cos_paraphrase": 0.984563946723938,
+        "median_cos_not_paraphrase": 0.9725561738014221,
+        "auc": 0.6453037261962891
+      }
+    },
+    "bge": {
+      "model": "BAAI/bge-small-en-v1.5",
+      "stsb_spearman": 0.8586418275215224,
+      "stsb_median_cos_by_human_score": {
+        "0-1": {
+          "n": 243,
+          "median_cos": 0.5474139451980591
+        },
+        "1-2": {
+          "n": 198,
+          "median_cos": 0.6888393759727478
+        },
+        "2-3": {
+          "n": 265,
+          "median_cos": 0.7665378451347351
+        },
+        "3-4": {
+          "n": 335,
+          "median_cos": 0.843224048614502
+        },
+        "4-5": {
+          "n": 338,
+          "median_cos": 0.9211926460266113
+        }
+      },
+      "same_meaning_threshold": {
+        "threshold": 0.8640000224113464,
+        "f1": 0.707732634338139,
+        "precision": 0.6352941176470588,
+        "recall": 0.7988165680473372
+      },
+      "paws": {
+        "median_cos_paraphrase": 0.988986611366272,
+        "median_cos_not_paraphrase": 0.9853599667549133,
+        "auc": 0.5868356227874756
+      }
+    }
+  }
+}
