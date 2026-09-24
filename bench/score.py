@@ -128,18 +128,20 @@ def score_set(name, rows, preds, target_vecs, ref_b, calib):
         for i, r in enumerate(rows):
             days[r["day"]].append(i)
         unit = lambda v: v / np.linalg.norm(v)
-        ref_c = {d: unit(target_vecs[idx].mean(axis=0)) for d, idx in days.items()}
-        pred_c = {d: unit(pv[idx].mean(axis=0)) for d, idx in days.items()}
-        per_day, margins = {}, {}
-        for d in sorted(days):
-            own = float(pred_c[d] @ ref_c[d])
-            other = float(np.mean([pred_c[d] @ ref_c[o] for o in days if o != d]))
-            per_day[d], margins[d] = own, own - other
-        m["day_gist_cos"] = float(np.mean(list(per_day.values())))
-        # How much closer a day's reconstructions are to THAT day's news than to other days'.
-        m["day_gist_margin"] = float(np.mean(list(margins.values())))
-        m["day_gist_cos_per_day"] = per_day
-        m["day_gist_margin_per_day"] = margins
+        # Day gist on both encoders: MPNet is flattered for systems that select by MPNet,
+        # so the independent-encoder version is the fair comparison.
+        for suffix, preds_v, refs_v in (("", pv, target_vecs), ("_indep", pb, ref_b)):
+            ref_c = {d: unit(refs_v[idx].mean(axis=0)) for d, idx in days.items()}
+            pred_c = {d: unit(preds_v[idx].mean(axis=0)) for d, idx in days.items()}
+            per_day, margins = {}, {}
+            for d in sorted(days):
+                own = float(pred_c[d] @ ref_c[d])
+                other = float(np.mean([pred_c[d] @ ref_c[o] for o in days if o != d]))
+                per_day[d], margins[d] = own, own - other
+            m[f"day_gist_cos{suffix}"] = float(np.mean(list(per_day.values())))
+            # How much closer a day's reconstructions are to THAT day's news than to other days'.
+            m[f"day_gist_margin{suffix}"] = float(np.mean(list(margins.values())))
+            m[f"day_gist_margin{suffix}_per_day"] = margins
     examples = sorted(range(len(rows)), key=lambda i: stable_int(rows[i]["id"], "ex"))[:4]
     ex = [(rows[i]["source"], ref[i], hyp[i], float(cos_m[i])) for i in examples]
     return m, ex
@@ -212,10 +214,15 @@ def main():
             lines.append("")
             lines.append("Day gist: cosine between a day's average reconstruction vector and that "
                          "day's average original vector; margin = how much closer it is to its own "
-                         "day than to the other days. " + "; ".join(
-                             f"{s} {results[s][name]['day_gist_cos']:.3f} "
-                             f"(margin {results[s][name]['day_gist_margin']:+.3f})"
-                             for s in args.systems if name in results[s]))
+                         "day than to the other days (5 days, so treat as directional).")
+            lines.append("")
+            lines.append("| System | Day gist (indep.) | Margin (indep.) | Day gist (MPNet) | Margin (MPNet) |")
+            lines.append("|---|---|---|---|---|")
+            for s in args.systems:
+                if name in results[s]:
+                    r = results[s][name]
+                    lines.append(f"| {s} | {r['day_gist_cos_indep']:.3f} | {r['day_gist_margin_indep']:+.3f} "
+                                 f"| {r['day_gist_cos']:.3f} | {r['day_gist_margin']:+.3f} |")
         lines.append("")
     (RESULTS_DIR / f"{args.report}.md").write_text("\n".join(lines) + "\n")
     ex_lines = [f"# Examples: {args.report}", ""]

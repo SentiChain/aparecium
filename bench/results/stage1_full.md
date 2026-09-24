@@ -1,4 +1,4 @@
-# Benchmark report: v3_trial (half test sets)
+# Benchmark report: stage1_full (full test sets)
 
 'Same meaning' = cosine at or above the level STS-B humans rate >= 4/5 (MPNet 0.818, independent 0.864). 'Lift' = mean cosine to the right original minus mean cosine to unrelated originals (item-specific signal).
 
@@ -8,44 +8,39 @@ Read the independent-encoder columns first: v3 and nn pick their output by MPNet
 
 | System | Same meaning (MPNet) | Same meaning (indep.) | Cos MPNet | Lift MPNet | Cos indep. | Lift indep. | Token F1 | BLEU | Names/numbers kept | Stops by itself | Distinct cands |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| s1 | 0% | 0% | 0.220 | +0.170 | 0.506 | +0.058 | 0.111 | 0.2 | 2% | 0% | 1.0 |
-| nn_stage1 | 0% | 0% | 0.488 | +0.451 | 0.620 | +0.221 | 0.142 | 1.2 | 11% | — | — |
-| v3trial_gpt2 | 0% | 0% | 0.384 | +0.352 | 0.585 | +0.193 | 0.153 | 0.8 | 5% | 99% | 5.0 |
-| v3trial_smol | 0% | 0% | 0.306 | +0.274 | 0.545 | +0.151 | 0.134 | 0.5 | 5% | 99% | 5.0 |
+| nn_stage1 | 0% | 0% | 0.487 | +0.448 | 0.620 | +0.217 | 0.143 | 1.6 | 10% | — | — |
+| v3s1_gpt2lora | 4% | 2% | 0.639 | +0.606 | 0.713 | +0.317 | 0.239 | 2.1 | 17% | 99% | 5.0 |
+| v3s1_smollora | 3% | 2% | 0.582 | +0.547 | 0.682 | +0.285 | 0.203 | 1.7 | 15% | 99% | 5.0 |
 
 ## B. Unseen outlets (CNN/DailyMail, XSum)
 
 | System | Same meaning (MPNet) | Same meaning (indep.) | Cos MPNet | Lift MPNet | Cos indep. | Lift indep. | Token F1 | BLEU | Names/numbers kept | Stops by itself | Distinct cands |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| s1 | 0% | 0% | 0.172 | +0.143 | 0.471 | +0.049 | 0.100 | 0.1 | 1% | 0% | 1.0 |
-| nn_stage1 | 0% | 0% | 0.425 | +0.383 | 0.588 | +0.185 | 0.117 | 0.5 | 8% | — | — |
-| v3trial_gpt2 | 0% | 0% | 0.327 | +0.283 | 0.564 | +0.160 | 0.135 | 0.8 | 5% | 97% | 5.0 |
-| v3trial_smol | 0% | 0% | 0.243 | +0.203 | 0.520 | +0.119 | 0.126 | 0.3 | 2% | 99% | 5.0 |
+| nn_stage1 | 0% | 0% | 0.431 | +0.385 | 0.597 | +0.189 | 0.126 | 0.5 | 9% | — | — |
+| v3s1_gpt2lora | 2% | 1% | 0.598 | +0.547 | 0.698 | +0.291 | 0.224 | 2.4 | 13% | 100% | 5.0 |
+| v3s1_smollora | 1% | 1% | 0.523 | +0.473 | 0.660 | +0.254 | 0.176 | 1.2 | 8% | 100% | 5.0 |
 
 ## C. BBC Feb-Jun 2025 (5 days)
 
 | System | Same meaning (MPNet) | Same meaning (indep.) | Cos MPNet | Lift MPNet | Cos indep. | Lift indep. | Token F1 | BLEU | Names/numbers kept | Stops by itself | Distinct cands |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| s1 | 0% | 0% | 0.227 | +0.165 | 0.477 | +0.057 | 0.120 | 0.1 | 3% | 0% | 1.0 |
-| nn_stage1 | 0% | 0% | 0.442 | +0.389 | 0.585 | +0.188 | 0.116 | 0.2 | 6% | — | — |
-| v3trial_gpt2 | 0% | 0% | 0.344 | +0.295 | 0.562 | +0.164 | 0.148 | 0.6 | 5% | 99% | 5.0 |
-| v3trial_smol | 0% | 0% | 0.275 | +0.228 | 0.523 | +0.126 | 0.139 | 0.3 | 4% | 100% | 5.0 |
+| nn_stage1 | 0% | 0% | 0.445 | +0.389 | 0.583 | +0.185 | 0.116 | 0.3 | 5% | — | — |
+| v3s1_gpt2lora | 2% | 0% | 0.606 | +0.550 | 0.686 | +0.289 | 0.221 | 2.1 | 11% | 100% | 5.0 |
+| v3s1_smollora | 0% | 0% | 0.543 | +0.485 | 0.654 | +0.255 | 0.189 | 0.6 | 8% | 99% | 5.0 |
 
 Day gist: cosine between a day's average reconstruction vector and that day's average original vector; margin = how much closer it is to its own day than to the other days (5 days, so treat as directional).
 
 | System | Day gist (indep.) | Margin (indep.) | Day gist (MPNet) | Margin (MPNet) |
 |---|---|---|---|---|
-| s1 | 0.733 | +0.004 | 0.326 | +0.029 |
-| nn_stage1 | 0.952 | +0.017 | 0.745 | +0.166 |
-| v3trial_gpt2 | 0.950 | +0.013 | 0.657 | +0.121 |
-| v3trial_smol | 0.941 | +0.010 | 0.608 | +0.095 |
+| nn_stage1 | 0.965 | +0.011 | 0.824 | +0.119 |
+| v3s1_gpt2lora | 0.980 | +0.017 | 0.873 | +0.151 |
+| v3s1_smollora | 0.978 | +0.015 | 0.853 | +0.131 |
 
 ## D. Tweets / Q&A titles / crypto
 
 | System | Same meaning (MPNet) | Same meaning (indep.) | Cos MPNet | Lift MPNet | Cos indep. | Lift indep. | Token F1 | BLEU | Names/numbers kept | Stops by itself | Distinct cands |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| s1 | 0% | 1% | 0.378 | +0.229 | 0.642 | +0.081 | 0.106 | 0.2 | 10% | 0% | 1.0 |
-| nn_stage1 | 0% | 0% | 0.391 | +0.325 | 0.590 | +0.149 | 0.077 | 0.2 | 6% | — | — |
-| v3trial_gpt2 | 0% | 0% | 0.274 | +0.218 | 0.529 | +0.106 | 0.068 | 0.2 | 5% | 97% | 5.0 |
-| v3trial_smol | 0% | 0% | 0.219 | +0.165 | 0.502 | +0.079 | 0.072 | 0.2 | 1% | 99% | 5.0 |
+| nn_stage1 | 0% | 0% | 0.397 | +0.339 | 0.587 | +0.150 | 0.075 | 0.1 | 5% | — | — |
+| v3s1_gpt2lora | 1% | 1% | 0.492 | +0.428 | 0.659 | +0.214 | 0.141 | 0.5 | 11% | 100% | 5.0 |
+| v3s1_smollora | 0% | 0% | 0.442 | +0.378 | 0.620 | +0.183 | 0.110 | 0.3 | 6% | 100% | 5.0 |
 
