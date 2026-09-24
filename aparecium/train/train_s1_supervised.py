@@ -1,4 +1,4 @@
-import os, argparse
+import os, sys, argparse
 import torch, torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
@@ -67,7 +67,8 @@ def main():
         f"[S1] Found {len(train_ds)} samples across {len(train_ds.files)} files (pattern={args.pattern})",
         flush=True,
     )
-    workers = 0 if os.name == "nt" else 2
+    # The lambda collate_fn cannot be pickled by spawn-based workers (Windows, macOS).
+    workers = 0 if os.name == "nt" or sys.platform == "darwin" else 2
     train_dl = DataLoader(
         train_ds,
         batch_size=args.batch_size,
@@ -76,7 +77,9 @@ def main():
         num_workers=workers,
     )
 
-    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        args.device = "mps" if torch.backends.mps.is_available() else "cpu"
+    device = torch.device(args.device)
     vocab = len(tokenizer)
 
     adapter = EmbAdapter(d_in=768, D=384, S_list=(8, 16), dropout=0.1)
