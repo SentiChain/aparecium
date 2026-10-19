@@ -32,4 +32,4 @@ Aparecium extracts short headlines, summaries, and sentences for training. The r
 
 ## Evaluation sources
 
-Evaluation includes held-out texts from the training sources, CNN/DailyMail and XSum summaries, BBC news descriptions, social posts, Q&A titles, and crypto headlines. The independent similarity threshold is calibrated using [STS Benchmark](https://ixa2.si.ehu.eus/stswiki/index.php/STSbenchmark). Aggregate scores and illustrative reconstructions do not change the licenses of those sources.
+Evaluation includes held-out texts from the training sources, CNN/DailyMail and XSum summaries, BBC news descriptions, social posts, Q&A titles, and crypto headlines. The independent similarity threshold is calibrated using [STS Benchmark](https://huggingface.co/datasets/sentence-transformers/stsb). Aggregate scores and illustrative reconstructions do not change the licenses of those sources.

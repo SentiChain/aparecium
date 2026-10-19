@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0 — 2026-10-19
+## 2.0.0 (2026-10-19)
 
 - Replace the previous decoder with a learned prefix and GPT-2 LoRA adapters for reconstructing short English text from standard MPNet embeddings.
 - Use the checkpoint trained with a 300,000-example corpus, including 1,000 examples reserved for validation. The default model is `SentiChain/aparecium`.
