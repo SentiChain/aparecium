@@ -61,16 +61,12 @@ raw_*.jsonl
 *.pkl
 *.index   # FAISS
 
-# Generated JSONL under package data
-aparecium_v2/data/*.jsonl
-!aparecium_v2/data/*.py
+# Local data and publishing credentials
+data/
+.pypirc
 
 # Caches
 .cache/
 .huggingface/
 huggingface/
 .torch/
-
-# Tooling
-.cursor/
-.agent-tools/

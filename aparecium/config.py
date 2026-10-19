@@ -1,41 +1,73 @@
-from dataclasses import dataclass
+"""Validated configuration for the embedding reconstruction model."""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from typing import Any, Mapping, Union
 
 
-@dataclass
-class Config:
-    seed: int = 1234
-    device: str = "cuda"
-    precision: str = "bf16"
-    # data
-    max_len: int = 64
-    vocab: str = "gpt2"
-    # model sizes
-    emb_adapter_heads: int = 2
-    emb_adapter_S: list = (8, 16)
-    emb_adapter_D: int = 384
-    decoder_layers: int = 12
-    decoder_heads: int = 8
-    decoder_d_model: int = 768
-    decoder_ff: int = 3072
-    dropout: float = 0.1
-    # surrogate r
-    r_text_layers: int = 4
-    r_text_heads: int = 8
-    r_text_d: int = 512
-    r_ff: int = 2048
-    r_temp: float = 0.07
-    # training
-    s1_batch: int = 512
-    s1_lr: float = 3e-4
-    s1_wd: float = 0.01
-    s1_warmup: int = 10000
-    s1_steps: int = 300000
-    s1_label_smoothing: float = 0.1
-    s2_lr: float = 5e-5
-    s2_steps: int = 100000
-    beam_width: int = 5
-    rerank_every: int = 8
-    rl_alpha: float = 0.7
-    rl_beta: float = 0.1
-    rl_gamma: float = 0.2
-    entropy_bonus: float = 1e-3
+@dataclass(frozen=True)
+class ModelConfig:
+    """Architecture and pinned pretrained model dependencies."""
+
+    architecture: str = "prefix-decoder"
+    base_model: str = "openai-community/gpt2"
+    base_revision: str = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
+    encoder_model: str = "sentence-transformers/all-mpnet-base-v2"
+    encoder_revision: str = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
+    embedding_dim: int = 768
+    prefix_length: int = 10
+    mapper_hidden: int = 1024
+    lora_rank: int = 16
+    max_length: int = 64
+
+    def __post_init__(self) -> None:
+        if self.architecture != "prefix-decoder":
+            raise ValueError("Unsupported model architecture")
+        if self.base_model != "openai-community/gpt2":
+            raise ValueError("base_model must be openai-community/gpt2")
+        if self.encoder_model != "sentence-transformers/all-mpnet-base-v2":
+            raise ValueError("encoder_model must be sentence-transformers/all-mpnet-base-v2")
+        for name in ("base_revision", "encoder_revision"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+                raise ValueError(f"{name} must be a full lowercase Git commit hash")
+        for name in ("embedding_dim", "prefix_length", "mapper_hidden", "lora_rank", "max_length"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.embedding_dim != 768:
+            raise ValueError("embedding_dim must be 768 for the supported encoder")
+        if self.prefix_length + self.max_length > 1024:
+            raise ValueError("prefix_length + max_length exceeds the language model context window")
+        if self.lora_rank > 768:
+            raise ValueError("lora_rank must not exceed the language model width")
+
+    @classmethod
+    def from_dict(cls, values: Mapping[str, Any]) -> "ModelConfig":
+        """Read a complete configuration without silently ignoring fields."""
+        if not isinstance(values, Mapping):
+            raise ValueError("Model configuration must be a JSON object")
+        expected = {field.name for field in fields(cls)}
+        missing = expected - set(values)
+        unknown = set(values) - expected
+        if missing or unknown:
+            details = []
+            if missing:
+                details.append("missing fields: " + ", ".join(sorted(missing)))
+            if unknown:
+                details.append("unknown fields: " + ", ".join(sorted(map(str, unknown))))
+            raise ValueError("Invalid model configuration (" + "; ".join(details) + ")")
+        return cls(**dict(values))
+
+    @classmethod
+    def load(cls, path: Union[str, Path]) -> "ModelConfig":
+        """Load a configuration JSON file."""
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+    def to_dict(self) -> dict:
+        """Return the serializable configuration."""
+        return asdict(self)

@@ -1,24 +1,29 @@
-
 [build-system]
 requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "aparecium"
-version = "1.0.0"
-description = "Aparecium v2: pooled MPNet embedding reversal for crypto social-media posts."
+version = "2.0.0"
+description = "Reconstruct English text from pooled MPNet embeddings."
 authors = [{name="SentiChain"}]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "ATTRIBUTIONS.md"]
 dependencies = [
-  "torch>=2.0",
-  "transformers>=4.40",
-  "tqdm",
-  "sentence-transformers>=2.2",
-  "huggingface-hub>=0.25",
-  "numpy>=1.23",
-  "fastapi>=0.110",
-  "uvicorn>=0.23",
+  "torch>=2.6,<3",
+  "transformers>=5,<6",
+  "sentence-transformers>=6.1,<7",
+  "huggingface-hub>=1,<2",
+  "peft>=0.21,<1",
+  "safetensors>=0.5,<1",
+  "numpy>=1.24,<3",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Text Processing :: Linguistic",
 ]
 
 [project.urls]
@@ -27,8 +32,14 @@ dependencies = [
 "Tracker" = "https://github.com/SentiChain/aparecium/issues"
 
 [project.optional-dependencies]
-dev = []
+server = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "pydantic>=2,<3"]
+dev = ["build>=1.2", "twine>=6", "httpx>=0.28", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "pydantic>=2,<3"]
+
+[project.scripts]
+aparecium = "aparecium.__main__:main"
+aparecium-serve = "aparecium.service:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["aparecium*"]
+namespaces = false
