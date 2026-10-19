@@ -1,0 +1,83 @@
+name: Publish package
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pypi-aparecium
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify distributions
+    if: >-
+      github.repository == 'SentiChain/aparecium' &&
+      github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact-id: ${{ steps.distributions.outputs.artifact-id }}
+    steps:
+    - name: Check out release source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Require successful tests for this commit
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        result=$(gh api --method GET \
+          "repos/$GITHUB_REPOSITORY/actions/workflows/onpush-ci.yml/runs" \
+          -f head_sha="$GITHUB_SHA" -f event=push -f per_page=100 \
+          --jq '.workflow_runs | first | .status == "completed" and .conclusion == "success"')
+        if [ "$result" != true ]; then
+          echo 'The latest test workflow for this commit must finish successfully before publishing.' >&2
+          exit 1
+        fi
+    - name: Install packaging tools
+      run: python -m pip install 'build>=1.2,<2' 'twine>=6,<8'
+    - name: Build distributions
+      run: python -m build
+    - name: Check distribution metadata
+      run: python -m twine check --strict dist/*
+    - name: Store distributions
+      id: distributions
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: python-distributions
+        path: |
+          dist/*.whl
+          dist/*.tar.gz
+        if-no-files-found: error
+        retention-days: 7
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/aparecium
+    permissions:
+      id-token: write
+    steps:
+    - name: Download verified distributions
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        artifact-ids: ${{ needs.build.outputs.artifact-id }}
+        path: dist
+        merge-multiple: true
+    - name: Publish distributions
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+      with:
+        attestations: true
