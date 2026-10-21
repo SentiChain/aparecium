@@ -64,6 +64,7 @@ raw_*.jsonl
 # Local data and publishing credentials
 data/
 .pypirc
+.release/
 
 # Caches
 .cache/

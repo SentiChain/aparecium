@@ -1,273 +1,273 @@
-"""Network-free checks of public reconstruction behavior."""
-
-from __future__ import annotations
+"""Matrix-only inference, strict inputs, and native token-state encoding."""
 
 import concurrent.futures
-from contextlib import ExitStack
 import threading
 import time
-from pathlib import Path
-from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from dataclasses import fields
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
 
-from aparecium.api import Aparecium, MODEL_FILES
+from aparecium import Aparecium, InvertResult
+from aparecium.api import DEFAULT_MODEL_ID, DEFAULT_MODEL_REVISION, MODEL_FILES, _validate_matrix
+from aparecium.config import ENCODER_MODEL_ID, ENCODER_REVISION
 
 
-def vector(index: int = 0, scale: float = 1.0) -> np.ndarray:
-    result = np.zeros(768, dtype=np.float32)
-    result[index] = scale
-    return result
+_PREVIOUS_THREADS = None
 
 
-class TestApareciumAPI(unittest.TestCase):
-    def setUp(self) -> None:
-        self.stack = ExitStack()
-        self.addCleanup(self.stack.close)
-        self.download = self.stack.enter_context(patch("aparecium.api.snapshot_download", return_value="/models/aparecium"))
-        self.load = self.stack.enter_context(patch("aparecium.api.PrefixDecoder.load"))
-        self.encoder_class = self.stack.enter_context(patch("aparecium.api.SentenceTransformer"))
-        self.decoder = self.load.return_value
+def setUpModule():
+    global _PREVIOUS_THREADS
+    _PREVIOUS_THREADS = torch.get_num_threads()
+    torch.set_num_threads(4)
+
+
+def tearDownModule():
+    torch.set_num_threads(_PREVIOUS_THREADS)
+
+
+def matrix(ids=(0, 7, 8, 2)):
+    values = np.zeros((len(ids), 768), dtype=np.float32)
+    values[:, 0] = ids
+    return values
+
+
+class EncoderTokenizer:
+    def __init__(self):
+        self.calls = []
+        self.long = False
+
+    def __call__(self, texts, **kwargs):
+        self.calls.append((texts, kwargs))
+        return {"input_ids": [[0] + ([3] * 255 if self.long else list(range(3, 3 + len(text.split())))) + [2]
+                              for text in texts]}
+
+    def pad(self, encoded, **kwargs):
+        ids = encoded["input_ids"]
+        size = max(map(len, ids))
+        return {"input_ids": torch.tensor([value + [1] * (size - len(value)) for value in ids]),
+                "attention_mask": torch.tensor([[1] * len(value) + [0] * (size - len(value)) for value in ids])}
+
+
+class ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.decoder = Mock()
         self.decoder.config = SimpleNamespace(
-            embedding_dim=768,
-            encoder_model="sentence-transformers/all-mpnet-base-v2",
-            encoder_revision="0123456789abcdef",
-            max_length=64,
+            encoder_model_id=ENCODER_MODEL_ID, encoder_revision=ENCODER_REVISION,
+            tokenizer_revision=ENCODER_REVISION, bos_token_id=0, eos_token_id=2,
         )
-        self.encoder = self.encoder_class.return_value
-        self.encoder.encode.side_effect = lambda texts, **kwargs: np.stack([vector() for _ in texts])
-        self.decoder.generate.side_effect = lambda vectors, num_candidates, **kwargs: [
-            {"candidates": [{"text": f"Candidate sentence number {i}", "stopped": True}
-                            for i in range(num_candidates)]}
-            for _ in vectors
-        ]
-        self.model = Aparecium(device="cpu")
+        self.decoder.predict_token_ids.side_effect = lambda states, **kwargs: states[:, 0].to(torch.int64).tolist()
+        self.decoder.tokenizer.decode.side_effect = lambda ids, **kwargs: " ".join(str(i) for i in ids if i not in (0, 1, 2))
+        self.load_patch = patch("aparecium.api.MatrixDecoder.load", return_value=self.decoder)
+        self.download_patch = patch("aparecium.api.snapshot_download", return_value="/model")
+        self.load = self.load_patch.start()
+        self.download = self.download_patch.start()
+        self.addCleanup(self.load_patch.stop)
+        self.addCleanup(self.download_patch.stop)
+        self.api = Aparecium()
 
-    def test_download_uses_default_repository_and_only_runtime_files(self) -> None:
-        self.download.assert_called_once_with(
-            repo_id="SentiChain/aparecium", revision=None,
-            allow_patterns=list(MODEL_FILES), local_files_only=False,
-        )
-        self.load.assert_called_once_with(Path("/models/aparecium"), device="cpu", local_files_only=False)
-        self.encoder_class.assert_not_called()
+    def test_default_revision_and_bundle_download_are_pinned(self):
+        self.download.assert_called_once_with(repo_id=DEFAULT_MODEL_ID, revision=DEFAULT_MODEL_REVISION,
+                                              allow_patterns=list(MODEL_FILES), local_files_only=False)
+        self.load.assert_called_once_with("/model", device=torch.device("cpu"))
+        self.assertEqual(str(self.api.device), "cpu")
+        self.assertEqual([field.name for field in fields(InvertResult)], ["text", "token_ids", "input_rows"])
+        self.assertFalse(hasattr(self.api, "invert_embedding"))
+        self.assertFalse(hasattr(self.api, "invert_embeddings"))
 
-    def test_explicit_model_revision_is_forwarded(self) -> None:
+    def test_local_bundle_and_custom_revision_have_no_download(self):
         self.download.reset_mock()
-        Aparecium(model_id="example/model", revision="0123456789abcdef", device="cpu")
-        self.download.assert_called_once_with(
-            repo_id="example/model", revision="0123456789abcdef",
-            allow_patterns=list(MODEL_FILES), local_files_only=False,
-        )
-
-    def test_local_model_and_offline_mode_propagate_to_dependencies(self) -> None:
-        self.download.reset_mock()
-        model = Aparecium(model_path="/local/model", device="cpu", local_files_only=True)
-        model.invert_embedding(vector())
+        api = Aparecium(model_path="/local", revision="a" * 40, local_files_only=True, token_batch_size=7)
         self.download.assert_not_called()
-        self.load.assert_called_with(Path("/local/model"), device="cpu", local_files_only=True)
-        self.encoder_class.assert_called_once_with(
-            self.decoder.config.encoder_model, revision=self.decoder.config.encoder_revision,
-            device="cpu", local_files_only=True,
+        self.assertEqual(api.revision, "a" * 40)
+        self.assertEqual(api.token_batch_size, 7)
+        api.invert_matrix(matrix())
+        self.assertEqual(self.decoder.predict_token_ids.call_args.kwargs, {"token_batch_size": 7})
+
+    def test_custom_repository_without_revision_uses_its_default_branch(self):
+        self.download.reset_mock()
+        api = Aparecium(model_id="example/matrix")
+        self.assertIsNone(api.revision)
+        self.download.assert_called_once_with(repo_id="example/matrix", revision=None,
+                                              allow_patterns=list(MODEL_FILES), local_files_only=False)
+
+    def test_explicit_revision_overrides_default_pin_for_each_repository(self):
+        for model_id in (DEFAULT_MODEL_ID, "example/matrix"):
+            self.download.reset_mock()
+            api = Aparecium(model_id=model_id, revision="a" * 40)
+            self.assertEqual(api.revision, "a" * 40)
+            self.download.assert_called_once_with(repo_id=model_id, revision="a" * 40,
+                                                  allow_patterns=list(MODEL_FILES), local_files_only=False)
+
+    def test_matrix_decoding_drops_only_framing_preserves_special_ids_and_uses_no_encoder(self):
+        with patch("transformers.AutoModel.from_pretrained", side_effect=AssertionError("encoder loaded")), patch(
+            "transformers.AutoTokenizer.from_pretrained", side_effect=AssertionError("encoder tokenizer loaded")
+        ):
+            result = self.api.invert_matrix(matrix((99, 7, 2, 8, 99)))
+        self.assertEqual(result, InvertResult(text="7 8", token_ids=[7, 2, 8], input_rows=5))
+        self.assertEqual(self.decoder.predict_token_ids.call_args.args[0][:, 0].tolist(), [7, 2, 8])
+        self.decoder.tokenizer.decode.assert_called_once_with([7, 2, 8], skip_special_tokens=True,
+                                                              clean_up_tokenization_spaces=False)
+        self.assertIsNone(self.api._encoder)
+
+    def test_right_padding_and_varied_length_batch_preserve_order(self):
+        results = self.api.invert_matrices(
+            [matrix((0, 4, 2, 99, 99)), matrix((0, 5, 6, 7, 2)), matrix((0, 8, 2))],
+            [[1, 1, 1, 0, 0], [True] * 5, [1.0] * 3],
         )
-        self.encoder.float.assert_called_once()
+        self.assertEqual([result.token_ids for result in results], [[4], [5, 6, 7], [8]])
+        self.assertEqual([result.input_rows for result in results], [3, 5, 3])
+        self.assertEqual([len(call.args[0]) for call in self.decoder.predict_token_ids.call_args_list], [1, 3, 1])
+        self.assertEqual(len(self.api.invert_matrices(np.stack([matrix(), matrix()]))), 2)
 
-    def test_scores_align_with_generation_order_and_fluency_filter(self) -> None:
-        self.decoder.generate.side_effect = None
-        self.decoder.generate.return_value = [{"candidates": [
-            {"text": "Short", "stopped": True},
-            {"text": "The roads reopened", "stopped": False},
-            {"text": "A dog barked", "stopped": True},
-        ]}]
-        self.encoder.encode.side_effect = None
-        self.encoder.encode.return_value = np.stack([vector(), vector() * 0.6 + vector(1) * 0.8, vector(1)])
-        result = self.model.invert_embedding(vector(scale=7), num_candidates=3, max_length=24, seed=17)
-        self.assertEqual(result.text, "The roads reopened")
-        self.assertEqual(result.candidates, ["Short", "The roads reopened", "A dog barked"])
-        np.testing.assert_allclose(result.scores, [1, 0.6, 0], atol=1e-6)
-        self.assertEqual(result.selected_index, 1)
-        self.assertFalse(result.stopped)
-        call = self.decoder.generate.call_args
-        np.testing.assert_allclose(call.args[0].cpu().numpy(), [vector()])
-        self.assertEqual(call.kwargs, {"num_candidates": 3, "max_length": 24, "seed": 17})
+    def test_float32_conversion_detachment_and_no_normalization(self):
+        values = matrix().astype(np.float64) * 3.25
+        tensor, rows = _validate_matrix(values)
+        self.assertEqual(tensor.dtype, torch.float32)
+        np.testing.assert_array_equal(tensor.numpy(), values.astype(np.float32))
+        self.assertEqual(rows, 4)
+        value = torch.tensor(matrix(), requires_grad=True)
+        self.api.invert_matrix(value)
+        self.assertFalse(self.decoder.predict_token_ids.call_args.args[0].requires_grad)
 
-    def test_all_candidates_are_eligible_when_none_pass_fluency_floor(self) -> None:
-        self.decoder.generate.side_effect = None
-        self.decoder.generate.return_value = [{"candidates": [
-            {"text": "", "stopped": True}, {"text": "Rain", "stopped": True},
-        ]}]
-        self.encoder.encode.side_effect = None
-        self.encoder.encode.return_value = np.stack([vector(1), vector()])
-        result = self.model.invert_embedding(vector(), num_candidates=2)
-        self.assertEqual(result.selected_index, 1)
-        self.assertEqual(result.text, "Rain")
-
-    def test_batch_order_and_chunk_sizes_are_preserved(self) -> None:
-        def generate(vectors, num_candidates, **kwargs):
-            return [{"candidates": [{"text": f"Sentence for vector {int(v.argmax())}", "stopped": True}]
-                     } for v in vectors]
-
-        self.decoder.generate.side_effect = generate
-        results = self.model.invert_embeddings(np.stack([vector(i) for i in range(5)]),
-                                              num_candidates=1, batch_size=2)
-        self.assertEqual([item.text for item in results], [f"Sentence for vector {i}" for i in range(5)])
-        self.assertEqual([len(call.args[0]) for call in self.decoder.generate.call_args_list], [2, 2, 1])
-        self.assertTrue(all(call.kwargs["batch_size"] == 32 for call in self.encoder.encode.call_args_list))
-
-    def test_embed_texts_uses_stock_encoder_and_preserves_order(self) -> None:
-        results = self.model.invert_texts(["The train arrived.", "The doors opened.", "Passengers left."], batch_size=2)
-        self.assertEqual(len(results), 3)
-        calls = self.encoder.encode.call_args_list
-        self.assertEqual(calls[0].args[0], ["The train arrived.", "The doors opened."])
-        self.assertEqual(calls[2].args[0], ["Passengers left."])
-        for call in calls:
-            self.assertTrue(call.kwargs["normalize_embeddings"])
-            self.assertTrue(call.kwargs["convert_to_numpy"])
-            self.assertFalse(call.kwargs["show_progress_bar"])
-        self.encoder_class.assert_called_once()
-
-    def test_single_text_returns_one_result(self) -> None:
-        result = self.model.invert_text("A train arrived.", num_candidates=2, max_length=32, seed=5)
-        self.assertEqual(result.selected_index, 0)
-        self.assertEqual(len(result.candidates), 2)
-        self.assertEqual(self.encoder.encode.call_args_list[0].args[0], ["A train arrived."])
-
-    def test_empty_batches_do_not_run_models(self) -> None:
-        for empty in ([], np.empty((0, 768)), torch.empty(0, 768)):
-            self.assertEqual(self.model.invert_embeddings(empty), [])
-        self.assertEqual(self.model.invert_texts([]), [])
-        self.decoder.generate.assert_not_called()
-        self.encoder.encode.assert_not_called()
-
-    def test_invalid_vectors_are_rejected_before_generation(self) -> None:
-        invalid = [
-            [0.1, 0.2], np.zeros(768), np.full(768, np.nan), np.full(768, np.inf),
-            [True] + [0.0] * 767, ["1"] + [0.0] * 767,
-            np.ones(768, dtype=complex), np.ones(768, dtype=bool),
-            torch.ones(768, dtype=torch.bool), torch.ones(768, dtype=torch.complex64),
-            np.ones((1, 768)), None,
-        ]
+    def test_invalid_matrix_values_fail_before_inference(self):
+        invalid = [np.zeros(768), np.ones((1, 768)), np.ones((2, 768)), np.ones((257, 768)),
+                   np.ones((3, 767)), np.ones((1, 3, 768)), [[1], [2, 3]], None,
+                   np.full((3, 768), np.nan), np.full((3, 768), np.inf), np.full((3, 768), 1e300),
+                   np.ones((3, 768), dtype=bool), np.ones((3, 768), dtype=complex),
+                   torch.ones(3, 768, dtype=torch.bool), torch.ones(3, 768, dtype=torch.complex64),
+                   [[True] + [0] * 767] * 3, [["1"] + [0] * 767] * 3]
         for value in invalid:
-            with self.subTest(value_type=type(value), shape=getattr(value, "shape", None)):
-                with self.assertRaises(ValueError):
-                    self.model.invert_embedding(value)
-        self.decoder.generate.assert_not_called()
+            with self.subTest(type=type(value), shape=getattr(value, "shape", None)), self.assertRaises(ValueError):
+                self.api.invert_matrix(value)
+        self.decoder.predict_token_ids.assert_not_called()
 
-    def test_invalid_batch_shapes_are_rejected(self) -> None:
-        for value in (vector(), [[1], [2, 3]], np.empty((0, 767)), np.empty((1, 0)), [[0] * 768]):
-            with self.subTest(shape=getattr(value, "shape", None)):
-                with self.assertRaises(ValueError):
-                    self.model.invert_embeddings(value)
+    def test_invalid_masks_fail_before_inference_including_padding_nonfinite_states(self):
+        for mask in ([1, 1, 1], [1, 0, 1, 0], [0, 1, 1, 1], [1, 1, 0, 0], [2] * 4,
+                     ["1"] * 4, [1, 1, 1, float("nan")], [[1] * 4]):
+            with self.subTest(mask=mask), self.assertRaises(ValueError):
+                self.api.invert_matrix(matrix(), mask)
+        values = matrix()
+        values[-1] = np.nan
+        with self.assertRaises(ValueError):
+            self.api.invert_matrix(values, [1, 1, 1, 0])
+        self.decoder.predict_token_ids.assert_not_called()
 
-    def test_extreme_finite_magnitudes_normalize_without_overflow(self) -> None:
-        for scale in (1e308, 1e-308, 1e30, 1e-30):
-            value = np.zeros(768, dtype=np.float64)
-            value[0] = scale
-            self.model.invert_embedding(value)
-            np.testing.assert_allclose(self.decoder.generate.call_args.args[0].cpu().numpy(), [vector()])
+    def test_entire_batch_validates_before_any_forward(self):
+        for values, masks in (([matrix(), np.ones(768)], None), ([matrix()] * 33, None),
+                              (matrix(), None), ([matrix()], []), ([matrix()], [[1] * 3]),
+                              ("matrix", None), ([matrix()], "mask"), (np.empty((0, 3, 767)), None)):
+            with self.subTest(type=type(values)), self.assertRaises(ValueError):
+                self.api.invert_matrices(values, masks)
+        self.decoder.predict_token_ids.assert_not_called()
 
-    def test_ordinary_vectors_use_exact_float32_tensor_normalization(self) -> None:
-        values = np.random.default_rng(11).normal(size=(8, 768)).astype(np.float32)
-        expected = torch.nn.functional.normalize(torch.tensor(values), dim=-1)
-        self.model.invert_embeddings(values)
-        actual = self.decoder.generate.call_args.args[0]
-        self.assertEqual(actual.dtype, torch.float32)
-        self.assertTrue(torch.equal(actual, expected))
+    def test_empty_batches_do_not_run_encoder_or_decoder(self):
+        self.assertEqual(self.api.invert_matrices([]), [])
+        self.assertEqual(self.api.invert_matrices(np.empty((0, 3, 768))), [])
+        self.assertEqual(self.api.invert_texts([]), [])
+        self.decoder.predict_token_ids.assert_not_called()
+        self.assertIsNone(self.api._encoder)
 
-    def test_extreme_vector_protection_does_not_change_ordinary_batch_rows(self) -> None:
-        values = np.random.default_rng(12).normal(size=(3, 768))
-        values[1] *= 1e300
-        expected = torch.nn.functional.normalize(torch.tensor(values[[0, 2]], dtype=torch.float32), dim=-1)
-        self.model.invert_embeddings(values)
-        actual = self.decoder.generate.call_args.args[0]
-        self.assertTrue(torch.equal(actual[[0, 2]], expected))
-        self.assertTrue(torch.isfinite(actual).all().item())
-        torch.testing.assert_close(actual.norm(dim=-1), torch.ones(3))
-
-    def test_reranking_preserves_encoder_normalized_vectors_without_rescaling(self) -> None:
-        rng = np.random.default_rng(13)
-        values = rng.normal(size=(1, 768)).astype(np.float32)
-        candidates = torch.nn.functional.normalize(torch.tensor(rng.normal(size=(5, 768)), dtype=torch.float32), dim=-1).numpy()
-        self.encoder.encode.side_effect = None
-        self.encoder.encode.return_value = candidates
-        actual = self.model.invert_embedding(values[0])
-        target = torch.nn.functional.normalize(torch.tensor(values), dim=-1).numpy()[0]
-        np.testing.assert_array_equal(actual.scores, candidates @ target)
-        self.encoder.encode.assert_called_once()
-        self.assertEqual(self.encoder.encode.call_args.kwargs["batch_size"], 32)
-
-    def test_tensors_are_detached_before_conversion(self) -> None:
-        value = torch.zeros(768, requires_grad=True)
-        with torch.no_grad():
-            value[0] = 1
-        self.model.invert_embedding(value)
-        self.assertFalse(self.decoder.generate.call_args.args[0].requires_grad)
-
-    def test_invalid_options_and_texts_fail_without_generation(self) -> None:
-        for kwargs in ({"num_candidates": 0}, {"num_candidates": True}, {"num_candidates": 1.5},
-                       {"num_candidates": 33}, {"max_length": 0}, {"max_length": 65},
-                       {"seed": -1}, {"seed": True}, {"seed": 2**63}):
+    def test_constructor_options_fail_before_download_or_load(self):
+        self.download.reset_mock()
+        self.load.reset_mock()
+        for kwargs in ({"device": "cuda"}, {"device": "cpu:0"}, {"device": "invalid"},
+                       {"token_batch_size": 0}, {"token_batch_size": 257}, {"token_batch_size": True},
+                       {"model_id": ""}, {"revision": ""}, {"local_files_only": 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
-                self.model.invert_embedding(vector(), **kwargs)
-        for batch_size in (0, -1, True, 1.5):
-            with self.subTest(batch_size=batch_size), self.assertRaises(ValueError):
-                self.model.invert_embeddings([vector()], batch_size=batch_size)
-        for texts in ("one text", [""], ["   "], [1], [None]):
-            with self.subTest(texts=texts), self.assertRaises(ValueError):
-                self.model.invert_texts(texts)
-        self.decoder.generate.assert_not_called()
+                Aparecium(**kwargs)
+        self.download.assert_not_called()
+        self.load.assert_not_called()
 
-    def test_numpy_integer_options_are_passed_as_python_integers(self) -> None:
-        self.model.invert_embedding(vector(), num_candidates=np.int64(1), max_length=np.int64(24), seed=np.int64(7))
-        self.assertTrue(all(type(value) is int for value in self.decoder.generate.call_args.kwargs.values()))
-
-    def test_decoder_and_encoder_cardinality_errors_are_explicit(self) -> None:
-        self.decoder.generate.side_effect = None
-        for drafts in ([], [{"candidates": []}]):
-            self.decoder.generate.return_value = drafts
-            with self.assertRaisesRegex(RuntimeError, "unexpected number"):
-                self.model.invert_embedding(vector())
-        self.decoder.generate.return_value = [{"candidates": [{"text": "A train arrived", "stopped": True}]}]
-        self.encoder.encode.side_effect = None
-        self.encoder.encode.return_value = np.stack([vector(), vector()])
+    def test_decoder_cardinality_error_is_explicit(self):
+        self.decoder.predict_token_ids.side_effect = None
+        self.decoder.predict_token_ids.return_value = []
         with self.assertRaisesRegex(RuntimeError, "unexpected number"):
-            self.model.invert_embedding(vector(), num_candidates=1)
+            self.api.invert_matrix(matrix())
 
-    def test_calls_on_one_instance_are_serialized(self) -> None:
+    def install_encoder(self):
+        tokenizer = EncoderTokenizer()
+        encoder = Mock()
+        encoder.side_effect = lambda **inputs: SimpleNamespace(
+            last_hidden_state=inputs["input_ids"].unsqueeze(-1).expand(-1, -1, 768).to(torch.float32)
+        )
+        self.api._encoder = encoder
+        self.api._encoder_tokenizer = tokenizer
+        return tokenizer, encoder
+
+    def test_text_convenience_uses_native_unpooled_states_and_right_padding(self):
+        tokenizer, encoder = self.install_encoder()
+        result = self.api.invert_texts(["a b c", "a", "a b"], batch_size=2)
+        self.assertEqual([item.token_ids for item in result], [[3, 4, 5], [3], [3, 4]])
+        self.assertEqual([item.input_rows for item in result], [5, 3, 4])
+        self.assertEqual([call.kwargs["input_ids"].shape[0] for call in encoder.call_args_list], [2, 1])
+        self.assertEqual(tokenizer.calls[0][1], {"add_special_tokens": True, "padding": False, "truncation": False})
+        self.assertEqual(self.api.invert_text("a b").token_ids, [3, 4])
+
+    def test_pinned_encoder_load_is_lazy_safe_and_cached(self):
+        encoder = Mock()
+        encoder.to.return_value = encoder
+        encoder.eval.return_value = encoder
+        encoder.requires_grad_.return_value = encoder
+        with patch("transformers.AutoModel.from_pretrained", return_value=encoder) as load_encoder, patch(
+            "transformers.AutoTokenizer.from_pretrained", return_value=EncoderTokenizer()
+        ) as load_tokenizer:
+            tokenizer, actual = self.api._ensure_encoder()
+            self.assertIs(actual, encoder)
+            self.assertEqual(self.api._ensure_encoder(), (tokenizer, encoder))
+        load_encoder.assert_called_once_with(ENCODER_MODEL_ID, revision=ENCODER_REVISION,
+                                             local_files_only=False, trust_remote_code=False,
+                                             use_safetensors=True, dtype=torch.float32)
+        load_tokenizer.assert_called_once_with(ENCODER_MODEL_ID, revision=ENCODER_REVISION,
+                                               local_files_only=False, trust_remote_code=False, use_fast=True)
+        encoder.requires_grad_.assert_called_once_with(False)
+
+    def test_overlong_text_rejected_before_encoder_forward_without_truncation(self):
+        tokenizer, encoder = self.install_encoder()
+        tokenizer.long = True
+        with self.assertRaisesRegex(ValueError, "3..256"):
+            self.api.invert_text("a")
+        encoder.assert_not_called()
+        self.decoder.predict_token_ids.assert_not_called()
+
+    def test_invalid_text_batches_fail_before_encoder_forward(self):
+        _, encoder = self.install_encoder()
+        for values in ("text", [""], ["   "], [None], [1], ["a"] * 33):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                self.api.invert_texts(values)
+        for size in (0, True, 33, 1.5):
+            with self.subTest(size=size), self.assertRaises(ValueError):
+                self.api.invert_texts(["a"], batch_size=size)
+        encoder.assert_not_called()
+
+    def test_bad_encoder_contract_does_not_reach_decoder(self):
+        _, encoder = self.install_encoder()
+        encoder.side_effect = lambda **inputs: SimpleNamespace(last_hidden_state=torch.zeros(1, 3, 768, dtype=torch.float16))
+        with self.assertRaisesRegex(RuntimeError, "float32"):
+            self.api.invert_text("a")
+        self.decoder.predict_token_ids.assert_not_called()
+
+    def test_calls_on_one_instance_are_serialized(self):
         state = {"active": 0, "peak": 0}
         state_lock = threading.Lock()
 
-        def generate(vectors, **kwargs):
+        def predict(values, **kwargs):
             with state_lock:
                 state["active"] += 1
                 state["peak"] = max(state["peak"], state["active"])
             time.sleep(0.02)
             with state_lock:
                 state["active"] -= 1
-            return [{"candidates": [{"text": "A train arrived", "stopped": True}]}]
+            return [3] * len(values)
 
-        self.decoder.generate.side_effect = generate
+        self.decoder.predict_token_ids.side_effect = predict
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            results = list(executor.map(lambda _: self.model.invert_embedding(vector(), num_candidates=1), range(3)))
+            results = list(executor.map(lambda _: self.api.invert_matrix(matrix()), range(3)))
         self.assertEqual(len(results), 3)
         self.assertEqual(state["peak"], 1)
-
-    def test_default_device_is_cpu_without_cuda_even_if_mps_exists(self) -> None:
-        with patch("torch.cuda.is_available", return_value=False), patch("torch.backends.mps.is_available", return_value=True):
-            self.assertEqual(str(Aparecium().device), "cpu")
-
-    def test_unavailable_devices_fail_before_downloading(self) -> None:
-        self.download.reset_mock()
-        with patch("torch.cuda.is_available", return_value=False), patch("torch.backends.mps.is_available", return_value=False):
-            for device in ("cuda", "mps", "cpu:0", "mps:0", "meta", "invalid"):
-                with self.subTest(device=device), self.assertRaises(ValueError):
-                    Aparecium(device=device)
-        with patch("torch.cuda.is_available", return_value=True), patch("torch.cuda.device_count", return_value=1):
-            with self.assertRaises(ValueError):
-                Aparecium(device="cuda:1")
-        self.download.assert_not_called()
 
 
 if __name__ == "__main__":

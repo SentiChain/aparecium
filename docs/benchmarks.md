@@ -1,76 +1,78 @@
 # Reconstruction benchmarks
 
-Aparecium improves measured semantic similarity over an earlier checkpoint of the same learned-prefix/GPT-2 LoRA architecture. It does not consistently preserve exact facts. This page describes both the aggregate improvement and examples of remaining errors.
+Aparecium can retain the central meaning of short crypto posts while corrupting a consequential quantity, forecast horizon, or condition. The measurements below distinguish token recovery from preservation of source claims. They do not measure the truth of those claims, future returns, or trading profitability.
 
-## Comparison
+## Input and assessment
 
-The earlier checkpoint used a corpus of 99,087 examples; the current checkpoint used 300,000. Each corpus reserved the same 1,000 validation examples, leaving 98,087 and 299,000 examples for training. Both models trained for three passes from the same pretrained GPT-2 base with freshly initialized trainable parameters.
+The reported model consumes complete native float32 token-state matrices from `sentence-transformers/all-mpnet-base-v2`, with encoder and tokenizer revision `e8c3b32edf5434bc2275fc9bab85f82640a19130`. It receives no source text, reference token IDs, retrieved material, or source-derived constraints during reconstruction. Each visible interior state produces one vocabulary prediction. The first and last framing positions are removed before text decoding.
 
-Both were evaluated on the same 1,222 short English texts, with five candidates per input, a 64-token generation limit, sampling seed 0, temperature 0.8, and top-p 0.9. Generation used CPU batches of eight. Candidate selection used MPNet cosine similarity after a simple length and repetition filter.
+The principal collection contains 60 held-out original posts from 20 historical event families, with three distinct authors per family. Events cover February through June 2026 and are balanced as six bullish, six bearish, four mixed, and four unclear source contexts. This is a deliberately balanced historical collection, not a prospective test or a sample of live-news prevalence. Training and previously assessed event families were excluded from this collection.
 
-To measure similarity separately from the model used for selection, each selected reconstruction and its original were embedded with [`BAAI/bge-small-en-v1.5`](https://huggingface.co/BAAI/bge-small-en-v1.5). A cosine similarity of at least **0.864** counts as a threshold pass. The threshold was calibrated against STS-B similarity labels of at least 4 out of 5.
+Event accounts were formed from each family's three reconstructed posts, then assessed against the original source claims. Two source-fidelity assessments applied the same criteria, with a second interpretation of ambiguous details. These are judgment-based ratings and have not been independently human validated. The two assessments are sensitivity checks, not independent samples from a population.
 
-**A threshold pass is a similarity proxy, not a finding that the reconstruction is factually correct.** Similarity measures can miss changed quantities, reversed roles, negation, and other important differences.
+A useful central claim means that the account conveys the event's main source-supported content. A critical assertion materially changes an asset, quantity, timing, action, condition, or other consequential claim. An account counted as useful without a critical assertion can still omit secondary details. These labels concern source fidelity and do not certify suitability for trading.
 
-## Five-candidate results
+## Event-level results
 
-| Test group | Examples | Earlier checkpoint: passes | Current checkpoint: passes |
-| --- | ---: | ---: | ---: |
-| Held-out examples from training sources | 350 | 58 (16.6%) | 86 (24.6%) |
-| CNN/DailyMail and XSum examples | 300 | 32 (10.7%) | 60 (20.0%) |
-| BBC news grouped across five days | 272 | 22 (8.1%) | 33 (12.1%) |
-| Social posts, Q&A titles, and crypto headlines | 300 | 20 (6.7%) | 44 (14.7%) |
-| **Total** | **1,222** | **132 (10.8%)** | **223 (18.2%)** |
+Both assessments recorded the same principal event counts:
 
-Every group improved on this measure. Mean independent cosine similarity also increased in all four groups:
-
-| Test group | Earlier checkpoint | Current checkpoint |
+| Measure | Reconstructed-post accounts | Original-source accounts |
 | --- | ---: | ---: |
-| Held-out examples from training sources | 0.783 | 0.804 |
-| CNN/DailyMail and XSum examples | 0.764 | 0.785 |
-| BBC news grouped across five days | 0.751 | 0.773 |
-| Social posts, Q&A titles, and crypto headlines | 0.724 | 0.752 |
+| Useful central claim | 20 / 20 | 20 / 20 |
+| Useful without a critical assertion | 18 / 20 | 20 / 20 |
+| At least one critical assertion | 2 / 20 | 0 / 20 |
+| Actionable event context | 20 / 20 | 20 / 20 |
+| Material action status preserved | 20 / 20 | 20 / 20 |
 
-Giving each group equal weight, the threshold-pass improvement was 7.34 percentage points. A paired bootstrap over test items gave a 95% interval of 5.43–9.35 points. This interval describes variation within these test sets; it does not measure variation across training runs or guarantee similar gains on other data.
+Actionable context can coexist with a critical assertion. Recognizing the event and asset does not make a wrong amount or date acceptable. Original-source accounts are a control for what the supplied posts can support; their ratings do not establish the external truth of the posts.
 
-## Candidate count and inference cost
+Across separately composed historical collections of 20 families, useful accounts without critical assertions ranged from 13 to 18 out of 20, or 65% through 90%. Those collections contain different events. The variation cannot be interpreted as a performance trend, and the latest percentage is not a production accuracy estimate.
 
-Twenty candidates increased aggregate similarity at the cost of additional computation:
+## Financial and timing details
 
-| Checkpoint | Candidates | Threshold passes / 1,222 | Average CPU seconds per item |
-| --- | ---: | ---: | ---: |
-| Earlier, 99,087-example corpus | 5 | 132 (10.8%) | 0.44 |
-| Current, 300,000-example corpus | 5 | 223 (18.2%) | 0.41 |
-| Earlier, 99,087-example corpus | 20 | 190 (15.5%) | 1.77 |
-| Current, 300,000-example corpus | 20 | 287 (23.5%) | 1.65 |
+Financial matching binds a value to its unit, asset, and economic role. Timing matching binds its value and kind to an actor, action, and timing role. Counts describe matched asserted fields (TP), unmatched asserted fields (FP), and missing source fields (FN). F1 is `2TP / (2TP + FP + FN)`.
 
-These are throughput-derived averages from CPU batches of eight on a MacBook Air with an M5 processor and 16 GB of memory, using four CPU threads. They exclude initial model downloads and loading, and are not single-request service latency guarantees. The recorded environment used Python 3.12, PyTorch 2.14, and Transformers 5.17.
+The collection contains 48 central financial roles across 16 applicable events and 57 central timing roles across 20 events.
 
-Training took approximately 190 minutes for the earlier corpus and 641 minutes for the larger corpus on the Apple GPU. These timings describe the recorded runs, not a required training budget for other machines.
+| Field measure | Primary TP / FP / FN | Primary F1 | Sensitivity TP / FP / FN | Sensitivity F1 |
+| --- | ---: | ---: | ---: | ---: |
+| Financial value, exact | 36 / 2 / 12 | 0.837 | 35 / 3 / 13 | 0.814 |
+| Financial value, tolerated approximation | 37 / 1 / 11 | 0.860 | 36 / 2 / 12 | 0.837 |
+| Timing role | 44 / 3 / 13 | 0.846 | 43 / 3 / 14 | 0.835 |
 
-More candidates can improve aggregate similarity without fixing factual errors. Changing the candidate count also changes the sampled candidate set; twenty candidates need not contain the same sampled outputs as a five-candidate call.
+Tolerated matching permits contextual amounts within 2.5% and quoted prices within 0.5% only when recognizable rounding or approximation is appropriate. Exact-sensitive roles remain exact; timing has no numerical tolerance. These tolerances do not validate a lost inequality, condition, action status, or economic meaning.
 
-## Recorded examples
+Complete central financial coverage occurred in 9 of 16 events under the primary assessment and 8 of 16 under sensitivity assessment. Complete timing coverage occurred in 12 of 20 and 11 of 20 respectively. A high field-level F1 can therefore coexist with an event account that lacks an important role.
 
-These examples come from a separate ten-sentence illustration with five candidates and seed 42. Outputs are reproduced without editing. They are illustrative, not a success-rate estimate.
+## Token recovery
 
-| Original | Earlier checkpoint | Current checkpoint |
+Across the same 60 posts, the model recovered 1,439 of 1,713 body token slots excluding URLs, or 84.00%. This measures token identity in aligned source positions. It does not establish that an entire amount, sentence, or event claim was preserved. URLs and tokenization fragments can account for substantial additional output, and malformed fragments may be difficult to read.
+
+## Consequential errors
+
+These short descriptions paraphrase recorded cases rather than reproducing source posts:
+
+| Source content | Reconstructed account | Practical consequence |
 | --- | --- | --- |
-| A dog chased a ball across the park. | The park pursued the ball, which had a long-distance pursuit. | The park's field encompassed the dog's pursuit of the ball. |
-| Heavy rain forced the city to close several roads. | Roads closed off in the city for several days due to heavy rains. | The city closed several roads due to heavy rain. |
-| Scientists developed a battery that can be recharged in ten minutes. | Scientists at Princeton have developed a rechargeable battery that can last 2-3 seconds. | Scientists have developed a rechargeable battery for ten seconds. |
-| The company denied reports that it would lay off 500 employees. | The company also denied rumors that the company would fire workers. | The company denied hiring 500 employees. |
+| An exchange mistakenly credited about 2,000 BTC. | The account asserted about 2,000,000 BTC. | A 1,000-fold magnitude error survived an otherwise recognizable event account. |
+| A long-term SOL price forecast used a 2030 horizon. | The account asserted a disagreement between 2030 and 2036. | The apparent source disagreement was introduced by reconstruction. |
+| A collateral account distinguished $325 million of holdings from a $315 million strategy allocation. | The account listed both figures without preserving their distinct roles, and omitted a corrupted BTC quantity. | Readable context survived while financial coverage and economic interpretation were incomplete. |
 
-The current checkpoint recovers the dog as the participant in the pursuit and removes the invented duration from the road closure. It still changes the battery's time unit and meaning. The employment example is a regression: denying layoffs becomes denying hiring. These differences matter even when the wording is fluent or the overall topic is similar.
+Broad accumulation, product-launch, selloff, and policy context can remain readable and useful. Financial roles, bounds, actor relationships, and time scope require closer inspection. Three posts do not guarantee correction: correlated mistakes can reinforce one another when an account is assembled from multiple reconstructions.
 
-## Limits of the comparison
+## Runtime measurement
 
-- The comparison uses one training seed per checkpoint. The larger corpus also entails more optimizer updates, so it tests more data and computation together rather than isolating data quantity.
-- The news test group contains held-out dataset examples; it is not proof that every underlying publisher was absent from training.
-- Duplicate and semantic-overlap filtering reduces known train/test overlap, but does not establish complete freedom from overlap or pretrained-model exposure.
-- The texts are short English units, with a 60-token GPT-2 input limit during data preparation. These results do not establish recovery quality for long articles, other languages, or other embedding models.
-- Independent embedding similarity is still an imperfect proxy. Names, numbers, dates, causality, and negation need direct inspection before a reconstruction is used as evidence.
-- The BBC grouping covers only five days; it does not establish reliable daily-news summarization.
-- Hardware, library versions, and batch composition can affect sampled outputs and performance.
+One recorded four-thread CPU run processed the 60 stored matrices in approximately 2.43 seconds. This timing covered shared prediction and associated validation work in the measurement path. It is not isolated decoder throughput or a single-request service latency guarantee. It excludes first-time downloads and does not establish cross-machine or sustained-load performance.
 
-The evidence supports improved semantic similarity and continued use as an approximate reconstruction baseline. It does not support a claim of reliable factual recovery.
+The matrices contained 2,714 visible state rows and 8,337,408 bytes of native float32 state data. Full token states require substantially more storage than a single pooled vector. Compression and production storage economics were not measured.
+
+## Interpretation limits
+
+- The event collection is small and deliberately balanced. Historical event selection and shared market episodes limit generalization to live traffic.
+- Source-fidelity ratings are judgment based and have not been independently human validated. Financial matching and materiality decisions can differ even when event-level counts agree.
+- The model was trained once with a fixed data mixture and update budget. These results do not measure variation across training seeds.
+- Native state and framing checks establish compatibility with the specified encoder, not factual correctness. Dimension checks alone cannot verify provenance.
+- Missing information and a false assertion have different consequences. Token recovery, field F1, and event usefulness measure different aspects of reconstruction.
+- The measurements do not establish exact quotation recovery, long-document quality, other-language quality, profitability, or reliable unattended replacement of source posts.
+
+See the [model card](https://github.com/SentiChain/aparecium/blob/master/docs/model-card.md) for architecture and training provenance, and the [README](https://github.com/SentiChain/aparecium/blob/master/README.md) for the input contract.

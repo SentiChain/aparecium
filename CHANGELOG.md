@@ -1,14 +1,12 @@
 # Changelog
 
-## 2.0.0 (2026-10-19)
+## Matrix reconstruction
 
-- Replace the previous decoder with a learned prefix and GPT-2 LoRA adapters for reconstructing short English text from standard MPNet embeddings.
-- Use the checkpoint trained with a 300,000-example corpus, including 1,000 examples reserved for validation. The default model is `SentiChain/aparecium`.
-- Add batch methods, candidate similarity scores, selected-candidate indices, and end-of-text status to the public API.
-- Provide a command-line interface and an optional HTTP service for the same model and generation settings.
-- Increase the independent-similarity threshold pass count from 132 to 223 out of 1,222 held-out texts compared with the earlier 99,087-example checkpoint using the same architecture and five candidates. Similarity does not establish factual correctness.
-- Replace the previous checkpoint format and remove surrogate scoring, beam search, and their configuration options. See the [migration guide](README.md#migrating-from-the-previous-release) before upgrading.
+- Reconstruct short English content from complete token states produced by the pinned `sentence-transformers/all-mpnet-base-v2` encoder and tokenizer.
+- Provide a nonlinear projection into the original frozen MPNet vocabulary, with portable tensor weights and explicit encoder provenance.
+- Expose single and batch matrix APIs, stored-matrix command-line input, and an HTTP service with the same validated input contract.
+- Return reconstructed text, predicted interior token IDs, and visible input-row counts. Text convenience methods create compatible states without pooling.
+- Require finite values, explicit framing, and valid right-padding masks. Reject incompatible pooled vectors and unsupported devices.
+- Document source-fidelity measurements, financial and timing errors, training-source acknowledgments, and the separate terms for the learned projection and upstream vocabulary.
 
-## 1.0.0
-
-- Release the pooled MPNet reconstruction API and the earlier decoder for crypto-related text.
+See [input compatibility](README.md#input-compatibility) for the matrix contract and integration changes.
