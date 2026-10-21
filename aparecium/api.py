@@ -1,4 +1,4 @@
-"""Reconstruct English text from stock MPNet sentence embeddings."""
+"""Reconstruct text directly from complete MPNet token-state matrices."""
 
 from __future__ import annotations
 
@@ -6,135 +6,128 @@ from dataclasses import dataclass
 from numbers import Integral, Real
 from pathlib import Path
 from threading import RLock
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import torch
 from huggingface_hub import snapshot_download
-from sentence_transformers import SentenceTransformer
 
-from .model import PrefixDecoder, is_fluent
+from .config import MAX_MATRIX_ROWS, STATE_WIDTH, TOKENIZER_FILES
+from .model import MatrixDecoder, _get_device
 
 
-DEFAULT_MODEL_ID = "SentiChain/aparecium"
-MODEL_FILES = (
-    "config.json",
-    "mapper.safetensors",
-    "adapter/adapter_config.json",
-    "adapter/adapter_model.safetensors",
-)
+DEFAULT_MODEL_ID = "SentiChain/aparecium-matrix"
+DEFAULT_MODEL_REVISION = "188712f6bc4bda9ff257922703f29bc9b458bf70"
+MAX_BATCH_SIZE = 32
+MODEL_FILES = ("config.json", "model.safetensors", *TOKENIZER_FILES)
 
 
 @dataclass
 class InvertResult:
-    """A reconstruction and its candidates in generation order.
-
-    ``scores`` contains MPNet cosine similarities, not confidence estimates.
-    ``selected_index`` identifies the chosen candidate in both lists.
-    ``stopped`` reports whether that candidate emitted its end-of-text token.
-    """
+    """Decoded text, all interior token IDs, and visible framing-inclusive rows."""
 
     text: str
-    candidates: list[str]
-    scores: list[float]
-    selected_index: int
-    stopped: bool
+    token_ids: list[int]
+    input_rows: int
 
 
-def _get_device(explicit: str | None) -> torch.device:
-    if explicit is None:
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    try:
-        device = torch.device(explicit)
-    except (TypeError, RuntimeError) as exc:
-        raise ValueError("device must be cpu, cuda, cuda:<index>, or mps") from exc
-    if device.type not in {"cpu", "cuda", "mps"}:
-        raise ValueError("device must be cpu, cuda, cuda:<index>, or mps")
-    if device.type in {"cpu", "mps"} and device.index is not None:
-        raise ValueError(f"{device.type} does not accept a device index")
-    if device.type == "cuda":
-        if not torch.cuda.is_available():
-            raise ValueError("CUDA is not available on this system")
-        if device.index is not None and device.index >= torch.cuda.device_count():
-            raise ValueError(f"CUDA device index {device.index} is not available")
-    if device.type == "mps" and not torch.backends.mps.is_available():
-        raise ValueError("MPS is not available on this system")
-    return device
+def _bounded_integer(value: object, name: str, maximum: int) -> int:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or not 1 <= value <= maximum:
+        raise ValueError(f"{name} must be an integer between 1 and {maximum}")
+    return int(value)
 
 
-def _positive_integer(value: int, name: str) -> None:
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-
-
-def _generation_options(num_candidates: int, max_length: int | None, seed: int, maximum_length: int) -> None:
-    _positive_integer(num_candidates, "num_candidates")
-    if num_candidates > 32:
-        raise ValueError("num_candidates must be between 1 and 32")
-    if max_length is not None:
-        _positive_integer(max_length, "max_length")
-        if max_length > maximum_length:
-            raise ValueError(f"max_length must be between 1 and {maximum_length}")
-    if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, Integral) or not 0 <= seed < 2**63:
-        raise ValueError("seed must be an integer between 0 and 2**63 - 1")
-
-
-def _validate_vectors(value: object, dimension: int, *, single: bool = False) -> np.ndarray:
-    """Validate shape and finite, nonzero coordinates without changing direction."""
+def _numeric_array(value: object, name: str, *, allow_bool: bool = False) -> np.ndarray:
     try:
         if isinstance(value, torch.Tensor):
-            if value.dtype == torch.bool or value.is_complex():
-                raise ValueError("embeddings must contain real numbers, not booleans")
+            if value.layout != torch.strided or value.is_complex() or value.is_quantized or (
+                value.dtype == torch.bool and not allow_bool
+            ):
+                raise ValueError(f"{name} must contain real numbers")
             array = value.detach().to(device="cpu", dtype=torch.float64).numpy()
-        elif isinstance(value, np.ndarray) and value.dtype.kind in "iuf":
-            array = value.astype(np.float64, copy=False)
+        elif isinstance(value, np.ndarray) and value.dtype.kind in ("biuf" if allow_bool else "iuf"):
+            with np.errstate(over="ignore", invalid="ignore"):
+                array = value.astype(np.float64, copy=False)
         else:
             elements = np.asarray(value, dtype=object)
-            if any(isinstance(x, (bool, np.bool_)) or not isinstance(x, Real) for x in elements.flat):
-                raise ValueError("embeddings must contain real numbers, not booleans or strings")
-            array = elements.astype(np.float64)
+            for element in elements.flat:
+                if isinstance(element, (bool, np.bool_)):
+                    if allow_bool:
+                        continue
+                    raise ValueError(f"{name} must not contain booleans")
+                if not isinstance(element, Real):
+                    raise ValueError(f"{name} must contain real numbers, not strings or complex values")
+            with np.errstate(over="ignore", invalid="ignore"):
+                array = elements.astype(np.float64)
     except (TypeError, OverflowError, RuntimeError) as exc:
-        raise ValueError("embeddings must be a rectangular array of real numbers") from exc
-
-    if not single and array.shape == (0,):
-        return np.empty((0, dimension), dtype=np.float32)
-    expected_ndim = 1 if single else 2
-    if array.ndim != expected_ndim or array.shape[-1] != dimension:
-        shape = f"({dimension},)" if single else f"(batch, {dimension})"
-        raise ValueError(f"embeddings must have shape {shape}; received {array.shape}")
-    if single:
-        array = array[np.newaxis, :]
+        raise ValueError(f"{name} must be a rectangular numerical array") from exc
     if not np.isfinite(array).all():
-        raise ValueError("embeddings must contain only finite numbers")
-    if np.any(np.max(np.abs(array), axis=1) == 0):
-        raise ValueError("embeddings must not contain a zero vector")
+        raise ValueError(f"{name} must contain only finite numbers")
     return array
 
 
-def _normalised_tensor(vectors: np.ndarray, device: torch.device) -> torch.Tensor:
-    """Normalize in model precision, rescaling only numerically extreme inputs."""
-    with np.errstate(over="ignore", under="ignore"):
-        tensor = torch.tensor(vectors.astype(np.float32), device=device)
-    norms = tensor.norm(p=2, dim=-1)
-    unsafe = ~torch.isfinite(norms) | (norms < 1e-12)
-    if unsafe.any().item():
-        rows = vectors[unsafe.cpu().numpy()]
-        scaled = rows / np.max(np.abs(rows), axis=1, keepdims=True)
-        tensor[unsafe] = torch.tensor(scaled.astype(np.float32), device=device)
-    return torch.nn.functional.normalize(tensor, dim=-1)
+def _validate_matrix(matrix: object, attention_mask: object = None) -> tuple[torch.Tensor, int]:
+    """Validate all supplied rows, then remove only explicit right padding."""
+    values = _numeric_array(matrix, "matrix")
+    if values.ndim != 2 or values.shape[1] != STATE_WIDTH or not 3 <= values.shape[0] <= MAX_MATRIX_ROWS:
+        raise ValueError(f"matrix must have shape (3..{MAX_MATRIX_ROWS}, {STATE_WIDTH}); received {values.shape}")
+    with np.errstate(over="ignore", invalid="ignore"):
+        values = values.astype(np.float32)
+    if not np.isfinite(values).all():
+        raise ValueError("matrix values must be representable as finite float32 states")
+    visible = len(values)
+    if attention_mask is not None:
+        mask = _numeric_array(attention_mask, "attention_mask", allow_bool=True)
+        if mask.shape != (len(values),) or not np.isin(mask, (0, 1)).all():
+            raise ValueError("attention_mask must be a binary vector aligned with matrix rows")
+        visible = int(mask.sum())
+        if visible < 3 or not np.all(mask[:visible] == 1) or not np.all(mask[visible:] == 0):
+            raise ValueError("attention_mask must be a right-padding prefix with at least 3 visible framing rows")
+    return torch.from_numpy(values[:visible].copy()), visible
+
+
+def _batch_items(value: object, name: str) -> list:
+    if isinstance(value, (np.ndarray, torch.Tensor)):
+        if (
+            value.ndim != 3
+            or value.shape[2] != STATE_WIDTH
+            or not 3 <= value.shape[1] <= MAX_MATRIX_ROWS
+        ):
+            raise ValueError(f"{name} must be a batch of matrices")
+        if len(value) > MAX_BATCH_SIZE:
+            raise ValueError(f"{name} must contain at most {MAX_BATCH_SIZE} matrices")
+        return list(value)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(f"{name} must be a sequence of matrices")
+    if len(value) > MAX_BATCH_SIZE:
+        raise ValueError(f"{name} must contain at most {MAX_BATCH_SIZE} matrices")
+    return list(value)
+
+
+def _validate_matrices(matrices: object, attention_masks: object = None) -> list[tuple[torch.Tensor, int]]:
+    """Validate an entire bounded batch before any decoder work."""
+    items = _batch_items(matrices, "matrices")
+    if attention_masks is None:
+        masks = [None] * len(items)
+    else:
+        if isinstance(attention_masks, (np.ndarray, torch.Tensor)):
+            if attention_masks.ndim != 2:
+                raise ValueError("attention_masks must be a batch of binary vectors")
+        elif not isinstance(attention_masks, Sequence) or isinstance(attention_masks, (str, bytes, bytearray)):
+            raise ValueError("attention_masks must be a batch of binary vectors")
+        if len(attention_masks) != len(items):
+            raise ValueError("attention_masks must have one mask per matrix")
+        masks = list(attention_masks)
+    return [_validate_matrix(item, mask) for item, mask in zip(items, masks)]
 
 
 class Aparecium:
-    """Load a prefix decoder and reconstruct texts from 768-dimensional vectors.
+    """Decode complete token-state matrices on CPU or explicit available MPS.
 
-    Inputs must come from the stock encoder recorded in the model configuration.
-    The default device is CUDA when available, otherwise CPU. Set ``device="mps"``
-    explicitly to use Apple Silicon acceleration. ``local_files_only=True``
-    requires the decoder, base language model, and encoder to be available locally.
-
-    Calls on the same instance are serialized. A seed makes the same call
-    repeatable on the same device and software versions; changing batch size can
-    change sampled candidates. Reconstructions may omit or invent factual details.
+    Rows must be unpooled ``last_hidden_state`` output from the pinned encoder,
+    including its first and last framing rows. Calls on an instance are serialized.
+    Matrix decoding needs only the verified model bundle; text convenience methods
+    also load the pinned encoder. Reconstruction can change factual details.
     """
 
     def __init__(
@@ -144,150 +137,124 @@ class Aparecium:
         model_path: str | Path | None = None,
         device: str | None = None,
         local_files_only: bool = False,
+        token_batch_size: int = 256,
     ) -> None:
         self.device = _get_device(device)
+        self.token_batch_size = _bounded_integer(token_batch_size, "token_batch_size", 256)
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError("model_id must be a nonempty string")
+        if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+            raise ValueError("revision must be a nonempty string or None")
+        if type(local_files_only) is not bool:
+            raise ValueError("local_files_only must be a boolean")
         self.model_id = model_id
-        self.revision = revision
+        self.revision = DEFAULT_MODEL_REVISION if revision is None and model_id == DEFAULT_MODEL_ID else revision
         self.local_files_only = local_files_only
         self._lock = RLock()
-        self._encoder: SentenceTransformer | None = None
-        path = model_path
-        if path is None:
-            path = snapshot_download(
+        self._encoder = None
+        self._encoder_tokenizer = None
+        if model_path is None:
+            model_path = snapshot_download(
                 repo_id=model_id,
-                revision=revision,
+                revision=self.revision,
                 allow_patterns=list(MODEL_FILES),
                 local_files_only=local_files_only,
             )
-        self.model = PrefixDecoder.load(
-            Path(path), device=str(self.device), local_files_only=local_files_only
-        )
+        if not isinstance(model_path, (str, Path)):
+            raise ValueError("model_path must be a model bundle directory")
+        self.model = MatrixDecoder.load(model_path, device=self.device)
 
-    def _ensure_encoder(self) -> SentenceTransformer:
+    def _ensure_encoder(self):
         if self._encoder is None:
-            encoder = SentenceTransformer(
-                self.model.config.encoder_model,
-                revision=self.model.config.encoder_revision,
-                device=str(self.device),
+            from transformers import AutoModel, AutoTokenizer
+
+            config = self.model.config
+            tokenizer = AutoTokenizer.from_pretrained(
+                config.encoder_model_id,
+                revision=config.tokenizer_revision,
                 local_files_only=self.local_files_only,
+                trust_remote_code=False,
+                use_fast=True,
             )
-            encoder.float().eval()
+            encoder = AutoModel.from_pretrained(
+                config.encoder_model_id,
+                revision=config.encoder_revision,
+                local_files_only=self.local_files_only,
+                trust_remote_code=False,
+                use_safetensors=True,
+                dtype=torch.float32,
+            )
+            encoder = encoder.to(device=self.device, dtype=torch.float32).eval().requires_grad_(False)
+            self._encoder_tokenizer = tokenizer
             self._encoder = encoder
-        return self._encoder
+        return self._encoder_tokenizer, self._encoder
 
-    def _encode(self, texts: list[str], batch_size: int) -> np.ndarray:
-        vectors = self._ensure_encoder().encode(
-            texts,
-            batch_size=batch_size,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        validated = _validate_vectors(vectors, self.model.config.embedding_dim)
-        with np.errstate(over="ignore", under="ignore"):
-            encoded = validated.astype(np.float32)
-        if not np.isfinite(encoded).all():
-            raise RuntimeError("encoder embeddings must be representable as finite float32 values")
-        return encoded
-
-    def _invert(self, vectors: np.ndarray, num_candidates: int, max_length: int | None,
-                seed: int, batch_size: int) -> list[InvertResult]:
-        results: list[InvertResult] = []
-        for offset in range(0, len(vectors), batch_size):
-            inputs = _normalised_tensor(vectors[offset:offset + batch_size], self.device)
-            drafts = self.model.generate(
-                inputs,
-                num_candidates=int(num_candidates),
-                max_length=int(max_length) if max_length is not None else None,
-                seed=int(seed),
+    def _invert_validated(self, matrices: list[tuple[torch.Tensor, int]]) -> list[InvertResult]:
+        results = []
+        for matrix, rows in matrices:
+            token_ids = self.model.predict_token_ids(matrix[1:rows - 1], token_batch_size=self.token_batch_size)
+            if len(token_ids) != rows - 2:
+                raise RuntimeError("Decoder returned an unexpected number of token IDs")
+            text = self.model.tokenizer.decode(
+                token_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )
-            targets = inputs.cpu().numpy()
-            if len(drafts) != len(targets):
-                raise RuntimeError("decoder returned an unexpected number of results")
-            groups = [draft["candidates"] for draft in drafts]
-            if any(len(group) != num_candidates for group in groups):
-                raise RuntimeError("decoder returned an unexpected number of candidates")
-            texts = [candidate["text"] for group in groups for candidate in group]
-            candidate_vectors = self._encode(texts, 32)
-            if len(candidate_vectors) != len(texts):
-                raise RuntimeError("encoder returned an unexpected number of embeddings")
-            for index, group in enumerate(groups):
-                start = index * num_candidates
-                scores = candidate_vectors[start:start + num_candidates] @ targets[index]
-                eligible = [i for i, item in enumerate(group) if is_fluent(item["text"])]
-                selected = max(eligible or range(num_candidates), key=lambda i: scores[i])
-                results.append(InvertResult(
-                    text=group[selected]["text"],
-                    candidates=[item["text"] for item in group],
-                    scores=[float(score) for score in scores],
-                    selected_index=selected,
-                    stopped=group[selected]["stopped"],
-                ))
+            results.append(InvertResult(text=text, token_ids=token_ids, input_rows=rows))
         return results
 
-    def invert_embedding(
-        self,
-        embedding: Sequence[float] | np.ndarray | torch.Tensor,
-        num_candidates: int = 5,
-        max_length: int | None = None,
-        seed: int = 0,
-    ) -> InvertResult:
-        """Reconstruct one vector; normalize a nonzero input automatically."""
-        _generation_options(num_candidates, max_length, seed, self.model.config.max_length)
-        vectors = _validate_vectors(embedding, self.model.config.embedding_dim, single=True)
+    def invert_matrix(self, matrix: object, attention_mask: object = None) -> InvertResult:
+        """Decode interior rows without source text, token truth, or an encoder."""
+        validated = _validate_matrix(matrix, attention_mask)
         with self._lock, torch.inference_mode():
-            return self._invert(vectors, num_candidates, max_length, seed, 8)[0]
+            return self._invert_validated([validated])[0]
 
-    def invert_embeddings(
-        self,
-        embeddings: Sequence[Sequence[float]] | np.ndarray | torch.Tensor,
-        num_candidates: int = 5,
-        max_length: int | None = None,
-        seed: int = 0,
-        batch_size: int = 8,
-    ) -> list[InvertResult]:
-        """Reconstruct a matrix in bounded batches, preserving input order.
-
-        An empty batch returns an empty list without generation or encoding.
-        ``max_length=None`` uses the model's configured token limit.
-        """
-        _generation_options(num_candidates, max_length, seed, self.model.config.max_length)
-        _positive_integer(batch_size, "batch_size")
-        vectors = _validate_vectors(embeddings, self.model.config.embedding_dim)
+    def invert_matrices(self, matrices: object, attention_masks: object = None) -> list[InvertResult]:
+        """Decode up to 32 matrices, preserving batch and interior row order."""
+        validated = _validate_matrices(matrices, attention_masks)
         with self._lock, torch.inference_mode():
-            return self._invert(vectors, num_candidates, max_length, seed, batch_size)
+            return self._invert_validated(validated)
 
-    def invert_text(
-        self,
-        text: str,
-        num_candidates: int = 5,
-        max_length: int | None = None,
-        seed: int = 0,
-    ) -> InvertResult:
-        """Embed one nonempty text with stock MPNet, then reconstruct it."""
-        return self.invert_texts([text], num_candidates, max_length, seed)[0]
+    def invert_text(self, text: str) -> InvertResult:
+        """Encode one nonempty text without truncation, then decode its token states."""
+        return self.invert_texts([text])[0]
 
-    def invert_texts(
-        self,
-        texts: Sequence[str],
-        num_candidates: int = 5,
-        max_length: int | None = None,
-        seed: int = 0,
-        batch_size: int = 8,
-    ) -> list[InvertResult]:
-        """Embed and reconstruct texts in bounded batches, preserving order."""
-        _generation_options(num_candidates, max_length, seed, self.model.config.max_length)
-        _positive_integer(batch_size, "batch_size")
-        if isinstance(texts, str):
-            raise ValueError("texts must be a sequence of strings; use invert_text for one string")
-        values = list(texts)
-        if any(not isinstance(text, str) or not text.strip() for text in values):
-            raise ValueError("texts must contain nonempty strings")
-        results: list[InvertResult] = []
+    def invert_texts(self, texts: Sequence[str], batch_size: int = 8) -> list[InvertResult]:
+        """Encode and reconstruct up to 32 texts using native token-state matrices."""
+        batch_size = _bounded_integer(batch_size, "batch_size", MAX_BATCH_SIZE)
+        if not isinstance(texts, Sequence) or isinstance(texts, (str, bytes, bytearray)):
+            raise ValueError("texts must be a sequence of nonempty strings")
+        if len(texts) > MAX_BATCH_SIZE:
+            raise ValueError(f"texts must contain at most {MAX_BATCH_SIZE} strings")
+        items = list(texts)
+        if any(not isinstance(text, str) or not text.strip() for text in items):
+            raise ValueError("texts must contain only nonempty strings")
+        if not items:
+            return []
         with self._lock, torch.inference_mode():
-            for offset in range(0, len(values), batch_size):
-                vectors = self._encode(values[offset:offset + batch_size], batch_size)
-                if len(vectors) != len(values[offset:offset + batch_size]):
-                    raise RuntimeError("encoder returned an unexpected number of embeddings")
-                results.extend(self._invert(vectors, num_candidates, max_length, seed, batch_size))
-        return results
+            tokenizer, encoder = self._ensure_encoder()
+            all_ids = tokenizer(items, add_special_tokens=True, padding=False, truncation=False)["input_ids"]
+            if len(all_ids) != len(items):
+                raise RuntimeError("Tokenizer returned an unexpected number of sequences")
+            for ids in all_ids:
+                if not 3 <= len(ids) <= MAX_MATRIX_ROWS:
+                    raise ValueError(f"Each text must encode to 3..{MAX_MATRIX_ROWS} rows including framing")
+                if ids[0] != self.model.config.bos_token_id or ids[-1] != self.model.config.eos_token_id:
+                    raise ValueError("Encoder tokenizer did not provide the required framing tokens")
+            results = []
+            for start in range(0, len(items), batch_size):
+                encoded = tokenizer.pad(
+                    {"input_ids": all_ids[start:start + batch_size]},
+                    padding=True,
+                    return_attention_mask=True,
+                    return_tensors="pt",
+                )
+                encoded = {name: value.to(self.device) for name, value in encoded.items()}
+                with torch.autocast(device_type=self.device.type, enabled=False):
+                    output = encoder(**encoded)
+                states = output.last_hidden_state
+                if not isinstance(states, torch.Tensor) or states.dtype != torch.float32:
+                    raise RuntimeError("Encoder must return float32 last_hidden_state token matrices")
+                if states.shape[:2] != encoded["attention_mask"].shape:
+                    raise RuntimeError("Encoder token-state shape does not match its attention mask")
+                validated = _validate_matrices(states, encoded["attention_mask"])
+                results.extend(self._invert_validated(validated))
+            return results

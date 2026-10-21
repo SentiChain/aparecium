@@ -4,19 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aparecium"
-version = "2.0.0"
-description = "Reconstruct English text from pooled MPNet embeddings."
+version = "3.0.0rc1"
+description = "Reconstruct short English text from full MPNet token matrices."
 authors = [{name="SentiChain"}]
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
-license-files = ["LICENSE", "ATTRIBUTIONS.md"]
+license-files = ["LICENSE", "ATTRIBUTIONS.md", "UPSTREAM_LICENSE", "NOTICE"]
 dependencies = [
   "torch>=2.6,<3",
   "transformers>=5,<6",
-  "sentence-transformers>=6.1,<7",
   "huggingface-hub>=1,<2",
-  "peft>=0.21,<1",
   "safetensors>=0.5,<1",
   "numpy>=1.24,<3",
 ]

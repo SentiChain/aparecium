@@ -1,133 +1,157 @@
 # Aparecium
 
-[![PyPI](https://img.shields.io/pypi/v/aparecium)](https://pypi.org/project/aparecium/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SentiChain/aparecium/blob/master/LICENSE)
+Aparecium reconstructs short English text from the full token-state matrix produced by [`sentence-transformers/all-mpnet-base-v2`](https://huggingface.co/sentence-transformers/all-mpnet-base-v2). A nonlinear projection maps each token state to the encoder's original vocabulary. Reconstruction receives the matrix without requiring the source text.
 
-Aparecium reconstructs short English text from a sentence embedding. It accepts the standard 768-dimensional vectors produced by [`sentence-transformers/all-mpnet-base-v2`](https://huggingface.co/sentence-transformers/all-mpnet-base-v2), then uses a learned prefix and GPT-2 with LoRA to generate candidate reconstructions. Candidates are checked for length and repeated phrases, then selected by MPNet similarity to the input.
+**The result is an approximate reconstruction.** Names, numbers, dates, conditions, and actions can be omitted or changed. Use the output to inspect represented content, and check important claims against source material. It is not verified news or a basis for unattended trading decisions.
 
-**The result is an approximate reconstruction, not the original text.** Outputs can preserve a topic while omitting or inventing names, numbers, dates, or relationships. Similarity scores measure embedding alignment; they are not probabilities of factual correctness.
-
-The current checkpoint uses a 300,000-example English corpus and replaces the previous decoder. The encoder remains unchanged: embeddings created with stock MPNet can be used directly. Vectors from other embedding models are not supported, even when they also have 768 dimensions.
+The input is `AutoModel.last_hidden_state`, including its first and last framing rows, from the pinned encoder and tokenizer described below. Pooled sentence vectors, including 768-element vectors from `SentenceTransformer.encode`, cannot be used. A stored pooled vector does not contain the full token states needed by this model.
 
 ## Install
 
 ```bash
-pip install aparecium
+pip install --pre aparecium
 ```
 
-Model files are downloaded on first use and cached locally. The default checkpoint is [`SentiChain/aparecium`](https://huggingface.co/SentiChain/aparecium). GPT-2 and MPNet are also downloaded as needed.
+The default model is [`SentiChain/aparecium-matrix`](https://huggingface.co/SentiChain/aparecium-matrix). Its weights and tokenizer are downloaded on first use and cached locally.
 
-## Reconstruct an embedding
+## Reconstruct a stored matrix
 
 ```python
+import numpy as np
 from aparecium import Aparecium
-from sentence_transformers import SentenceTransformer
 
-encoder = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
-embedding = encoder.encode(
-    "Heavy rain forced the city to close several roads.",
-    normalize_embeddings=True,
-)
-
+matrix = np.load("matrix.npy", allow_pickle=False)
 model = Aparecium()
-result = model.invert_embedding(embedding)
+result = model.invert_matrix(matrix)
 
 print(result.text)
-print(result.candidates)
-print(result.scores)
+print(result.token_ids)
+print(result.input_rows)
 ```
 
-The reconstruction step receives only the embedding. The original sentence above is used only to create that embedding.
+`invert_matrix` uses only the supplied states and optional attention mask. It does not re-embed text or retrieve source material.
 
-`InvertResult` exposes:
-
-| Field | Meaning |
+| Result field | Meaning |
 | --- | --- |
-| `text` | Selected reconstruction. |
-| `candidates` | Generated candidate texts. |
-| `scores` | MPNet cosine similarity for each candidate, in the same order. |
-| `selected_index` | Index of the selected candidate. |
-| `stopped` | Whether the selected candidate emitted its end-of-text token. |
+| `text` | Decoded reconstruction, with special tokens skipped. |
+| `token_ids` | Predicted IDs for every visible interior row, including any predicted special IDs. |
+| `input_rows` | Number of visible input rows, including the first and last framing rows. |
 
-Use `invert_embeddings` to reconstruct multiple vectors:
+The input contract is:
+
+- Token states with shape `(sequence_length, 768)`, containing 3 through 256 rows. Preserve native `float32` encoder output when storing states.
+- States from the pinned encoder and tokenizer, without pooling, row normalization, quantization, or dimensionality reduction.
+- The first and last visible rows are the encoder's beginning and end framing positions. The decoder removes these positions before returning token IDs.
+- An optional binary attention mask of the same sequence length. Visible rows must form a prefix followed by any right padding, with at least three visible rows.
+- Finite real values only. Numeric inputs are converted to `float32`; overflow is rejected. Other embedding models are incompatible even if their output width is 768.
+
+To reconstruct up to 32 matrices, pass a batch array or a list of matrices. Lists can contain different sequence lengths:
 
 ```python
-embeddings = encoder.encode(
-    [
-        "Heavy rain forced the city to close several roads.",
-        "The airport reopened on Monday after a snow storm.",
-    ],
-    normalize_embeddings=True,
-)
-
-results = model.invert_embeddings(embeddings, num_candidates=5, max_length=64, seed=0)
+results = model.invert_matrices([matrix, matrix])
 for result in results:
     print(result.text)
 ```
 
-For a quick round-trip check, `invert_text` embeds one string before reconstructing it; `invert_texts` does the same for a sequence of strings:
+Use `attention_masks=` when a batch contains padded rows. Matrix width and shape checks cannot establish encoder provenance: record the encoder identifier, revision, and preprocessing alongside stored states.
+
+## Produce compatible matrices
+
+Use the encoder and tokenizer at revision `e8c3b32edf5434bc2275fc9bab85f82640a19130`. Save the complete final hidden states rather than a pooled or normalized sentence vector:
+
+```python
+import numpy as np
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+encoder_id = "sentence-transformers/all-mpnet-base-v2"
+encoder_revision = "e8c3b32edf5434bc2275fc9bab85f82640a19130"
+tokenizer = AutoTokenizer.from_pretrained(encoder_id, revision=encoder_revision)
+encoder = AutoModel.from_pretrained(
+    encoder_id, revision=encoder_revision, dtype=torch.float32
+).eval()
+
+inputs = tokenizer(
+    "Heavy rain forced the city to close several roads.",
+    return_tensors="pt",
+    truncation=False,
+)
+if not 3 <= inputs["input_ids"].shape[1] <= 256:
+    raise ValueError("Text must produce 3 through 256 token rows, including framing.")
+
+with torch.inference_mode():
+    matrix = encoder(**inputs).last_hidden_state[0].cpu().numpy()
+
+np.save("matrix.npy", matrix, allow_pickle=False)
+```
+
+For a batch producer, retain each attention mask and keep only its visible prefix or pass the mask with its padded matrix. Do not truncate overlong source text silently: reconstruction can recover only the content represented by the stored states.
+
+## Text convenience methods
+
+`invert_text` creates compatible states from one string before reconstructing them. `invert_texts` accepts up to 32 strings. These are round-trip convenience methods; stored-matrix reconstruction uses `invert_matrix` or `invert_matrices`.
 
 ```python
 result = model.invert_text("Heavy rain forced the city to close several roads.")
 print(result.text)
 ```
 
-## Generation settings
+These methods use the pinned `AutoTokenizer` and `AutoModel.last_hidden_state`, with no pooling. Text that produces more than 256 rows is rejected. The encoder weights are downloaded separately when a text convenience method first needs them.
 
-All four inversion methods accept `num_candidates`, `max_length`, and `seed`.
-
-| Option | Default | Effect |
-| --- | --- | --- |
-| `num_candidates` | `5` | Accepts 1–32 candidates: one greedy candidate and additional sampled candidates. |
-| `max_length` | `64` | Maximum generated tokens per candidate. |
-| `seed` | `0` | Controls candidate sampling. |
-
-Twenty candidates improved aggregate similarity in the benchmark, with about four times the inference time. More candidates do not guarantee a better reconstruction for an individual input. Sampling results can vary with hardware, dependency versions, and batch composition.
-
-The default device is CUDA when available, otherwise CPU. Apple GPU execution requires an explicit `device="mps"`. Use an explicit device when needed:
+## Loading and devices
 
 ```python
-model = Aparecium(model_id="SentiChain/aparecium", device="cpu")
+model = Aparecium(
+    model_id="SentiChain/aparecium-matrix",
+    revision=None,
+    model_path=None,
+    device=None,
+    local_files_only=False,
+    token_batch_size=256,
+)
 ```
 
-The constructor also accepts `revision` to select a specific Hub commit and `model_path` to load a local checkpoint directory. `local_files_only=True` prevents downloads; the checkpoint and the required GPT-2 and MPNet files must already be available locally.
+CPU is the default device. Set `device="mps"` explicitly to use a supported Apple GPU. The runtime supports CPU and MPS, and an unavailable requested device raises an error. `token_batch_size` accepts 1 through 256 and controls how many state rows are projected together; it does not alter the sequence-length or matrix-count limits.
+
+Set `revision` to a Hub commit for reproducible model loading, or use `model_path` for a local artifact directory. `local_files_only=True` prevents downloads. Matrix reconstruction then needs the complete local model artifact; text convenience methods also need the pinned encoder files in the local cache.
 
 ## Command line
 
 ```bash
-python -m aparecium "Heavy rain forced the city to close several roads."
+aparecium --matrix-file matrix.npy
+aparecium --matrices-file matrices.json --json
+aparecium "Heavy rain forced the city to close several roads."
+echo "Heavy rain forced the city to close several roads." | aparecium --json
 ```
 
-```bash
-echo "Heavy rain forced the city to close several roads." | python -m aparecium --json
-```
+The equivalent module command is `python -m aparecium`. Choose a matrix file, a matrices file, or text. Without a file or positional text, the command reads text from standard input.
 
-The command embeds the supplied text and prints its reconstruction. Use `--json` to inspect the candidates and scores. Options include `--model-id`, `--revision`, `--model-path`, `--device`, `--candidates`, `--max-length`, and `--seed`.
+`--matrix-file` accepts a two-dimensional `.npy` file, a JSON matrix array, or a JSON object containing `matrix` and an optional `attention_mask`. `--matrices-file` accepts a three-dimensional `.npy` file, a JSON list of matrices, or a JSON object containing `matrices` and optional `attention_masks`. JSON supports matrices with different sequence lengths. Input files are limited to 16 MiB.
+
+`--json` returns the result fields above. Batch JSON has a `results` array. Shared options are `--model-id`, `--revision`, `--model-path`, `--device`, `--local-files-only`, and `--token-batch-size`.
 
 ## HTTP service
 
 ```bash
-pip install 'aparecium[server]'
-aparecium-serve
+pip install --pre 'aparecium[server]'
+aparecium-serve --host 127.0.0.1 --port 8000
 ```
 
-The equivalent module command is `python -m aparecium.service`. The service exposes `GET /health` and `POST /invert`. An inversion request contains either one `embedding` or multiple `embeddings`, plus optional `num_candidates`, `max_length`, and `seed` fields. It does not require the source text.
+The equivalent module command is `python -m aparecium.service`. The service accepts the shared model options above. `APARECIUM_LOCAL_FILES_ONLY=true` also enables offline loading.
 
-This example sends a complete vector:
+`GET /health` reports readiness and the input contract. `POST /invert` accepts either `matrix` with optional `attention_mask`, or `matrices` with optional `attention_masks`. Supply one of those two forms and no other fields. The service does not need source text.
+
+This example sends a complete saved matrix:
 
 ```python
 import json
 from urllib.request import Request, urlopen
-from sentence_transformers import SentenceTransformer
+import numpy as np
 
-encoder = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
-embedding = encoder.encode(
-    "Heavy rain forced the city to close several roads.",
-    normalize_embeddings=True,
-)
+matrix = np.load("matrix.npy", allow_pickle=False)
 request = Request(
     "http://127.0.0.1:8000/invert",
-    data=json.dumps({"embedding": embedding.tolist(), "num_candidates": 5}).encode(),
+    data=json.dumps({"matrix": matrix.tolist()}).encode(),
     headers={"Content-Type": "application/json"},
     method="POST",
 )
@@ -135,39 +159,20 @@ with urlopen(request) as response:
     print(json.load(response))
 ```
 
+A single request returns `text`, `token_ids`, and `input_rows`; a batch request returns a `results` array. Unknown fields, pooled vectors, invalid masks, and nonfinite values are rejected. Request bodies are limited to 16 MiB. Invalid inputs return HTTP 422, oversized bodies return 413, and an unavailable model returns 503.
+
 ## Quality and limitations
 
-On the same 1,222 held-out texts, using five candidates per input, the current model exceeded a calibrated independent-similarity threshold on **223 examples (18.2%)**, compared with **132 examples (10.8%)** for the earlier checkpoint trained with a 99,087-example corpus. This is a semantic-similarity proxy, not a factual accuracy rate or a direct comparison with the previous package decoder.
+On a held-out collection of 20 historical crypto event families with three posts per event, all 20 reconstructed event accounts retained a useful central claim. Under two source-fidelity assessments, 18 were useful without a critical assertion and two contained critical assertions. These are judgment-based assessments, not independently human-validated accuracy estimates or verified market outcomes. The collection was balanced across bullish, bearish, mixed, and unclear source context rather than sampled from a live news stream.
 
-The following are recorded outputs from a separate ten-sentence illustration, using five candidates and seed 42:
+Token recovery and broad event usefulness do not guarantee safe financial detail. In recorded cases, about 2,000 BTC became about 2,000,000 BTC, and a forecast horizon of 2030 became 2036. Forecast bounds, secondary quantities, and conditions can also disappear. Combining multiple reconstructed posts can repeat a shared error.
 
-| Original | Current checkpoint reconstruction |
-| --- | --- |
-| Heavy rain forced the city to close several roads. | The city closed several roads due to heavy rain. |
-| Scientists developed a battery that can be recharged in ten minutes. | Scientists have developed a rechargeable battery for ten seconds. |
-| The company denied reports that it would lay off 500 employees. | The company denied hiring 500 employees. |
+The model is intended for short English content from the specified encoder. Exact quotation recovery, long documents, other languages, trading profitability, and unattended source replacement have not been established. See the [benchmark details](https://github.com/SentiChain/aparecium/blob/master/docs/benchmarks.md) and [model card](https://github.com/SentiChain/aparecium/blob/master/docs/model-card.md) for training provenance, field-level results, and measurement limits.
 
-The rain example preserves the claim. The battery example changes the duration, and the employment example changes the action being denied. Fluent output and a high similarity score do not establish that important facts survived.
+## Input compatibility
 
-The training corpus contains short English texts of up to 60 GPT-2 tokens. The model is not designed to recover long articles, exact quotations, or details absent from the pooled embedding. Treat reconstructions as hypotheses to inspect, not as verified source material.
-
-See [benchmark details](https://github.com/SentiChain/aparecium/blob/master/docs/benchmarks.md) for the comparison, decoding costs, and measurement limitations, and the [model card](https://github.com/SentiChain/aparecium/blob/master/docs/model-card.md) for training and architecture information.
-
-## Migrating from the previous release
-
-The current release replaces the decoder and checkpoint format. Previous checkpoints cannot be loaded by the new implementation. `Aparecium()`, `invert_embedding`, `invert_text`, and the result's `text` and `candidates` fields remain the basic entry points.
-
-| Previous option | Current option |
-| --- | --- |
-| `repo_id` | `model_id` |
-| `ckpt_filename`, `r_ckpt_filename` | Use a model repository and `revision`, or a complete local `model_path`. |
-| `beam` | `num_candidates`; this selects the number of generated candidates, not a beam width. |
-| `max_len` | `max_length` |
-| `rerank_every`, `alpha` | Removed with surrogate scoring and beam search. |
-| Previous inference service module | `aparecium-serve` or `python -m aparecium.service`. |
-
-Update these arguments when upgrading. The new implementation does not load the previous decoder.
+Integrations that store pooled sentence vectors must capture full token states to use this model. Replace pooled-vector calls with `invert_matrix` or `invert_matrices`, preserve framing and attention masks, and update service payloads to `matrix` or `matrices`. Pooled checkpoints and vector APIs are unsupported.
 
 ## License and attribution
 
-Aparecium code and released mapper/adapter weights are licensed under the [MIT License](https://github.com/SentiChain/aparecium/blob/master/LICENSE). GPT-2, MPNet, and the training datasets retain their respective licenses. See [ATTRIBUTIONS.md](https://github.com/SentiChain/aparecium/blob/master/ATTRIBUTIONS.md) for sources and acknowledgments.
+Aparecium code and the learned projection are licensed under the [MIT License](https://github.com/SentiChain/aparecium/blob/master/LICENSE). The included original MPNet vocabulary weights and tokenizer retain their Apache-2.0 terms and notices. Training sources retain their own terms; source text is not redistributed with the model. See [ATTRIBUTIONS.md](https://github.com/SentiChain/aparecium/blob/master/ATTRIBUTIONS.md).

@@ -1,0 +1,9 @@
+Aparecium includes the original input-vocabulary weights and tokenizer of
+sentence-transformers/all-mpnet-base-v2 by Sentence Transformers.
+These upstream components are distributed under the Apache License.
+Source: https://huggingface.co/sentence-transformers/all-mpnet-base-v2
+Revision: e8c3b32edf5434bc2275fc9bab85f82640a19130
+The input-vocabulary weights are unchanged. The learned projection and
+vocabulary bias are separate parameters developed by SentiChain.
+The full encoder and training texts are not included.
+See UPSTREAM_LICENSE and ATTRIBUTIONS.md for attribution and terms.
