@@ -9,7 +9,7 @@ The input is `AutoModel.last_hidden_state`, including its first and last framing
 ## Install
 
 ```bash
-pip install --pre aparecium
+pip install aparecium
 ```
 
 The default model is [`SentiChain/aparecium-matrix`](https://huggingface.co/SentiChain/aparecium-matrix). Its weights and tokenizer are downloaded on first use and cached locally.
@@ -133,7 +133,7 @@ The equivalent module command is `python -m aparecium`. Choose a matrix file, a 
 ## HTTP service
 
 ```bash
-pip install --pre 'aparecium[server]'
+pip install 'aparecium[server]'
 aparecium-serve --host 127.0.0.1 --port 8000
 ```
 

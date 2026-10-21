@@ -29,7 +29,7 @@ datasets:
 ## Loading
 
 ```bash
-pip install --pre aparecium
+pip install aparecium
 ```
 
 ```python
